@@ -21,7 +21,6 @@ import {
   classifyBucket,
   isNamedBucket,
   type TellerTransaction,
-  type SpendingBucket,
 } from "@/lib/plaid-types";
 
 // ── Helpers ───────────────────────────────────────────────────────────
@@ -54,20 +53,33 @@ function estimateRecurring(txns: TellerTransaction[]) {
     if (t.amount <= 0) return false;
     const blob = `${t.merchantName ?? ""} ${t.name}`.toLowerCase();
     const bucket = classifyBucket(t);
-    return bucket === "Software" || keywords.some((k) => blob.includes(k));
+    return (
+      (bucket as string) === "Software" ||
+      (bucket as string) === "Software & SaaS" ||
+      (bucket as string) === "Cloud Infrastructure & DevOps" ||
+      (bucket as string) === "Enterprise SaaS & Workflow" ||
+      (bucket as string) === "Marketing Tools & Automation" ||
+      (bucket as string) === "Creative Tooling & Production" ||
+      (bucket as string) === "Corporate Subscriptions & Gifts" ||
+      keywords.some((k) => blob.includes(k))
+    );
   });
   return recurring.reduce((s, t) => s + t.amount, 0);
 }
 
 // ── Bucket bar chart (Tailwind only) ──────────────────────────────────
 
+// Keys here MUST match the exact 28-bucket schema in plaid-types.ts so the
+// `isNamedBucket` type guard narrows cleanly and the lookup actually hits.
 const NAMED_BUCKET_COLORS: Record<string, string> = {
-  Software: "bg-electric",
-  Rent: "bg-jackson",
-  Logistics: "bg-vibrant",
-  Payroll: "bg-hotpink",
-  Materials: "bg-cream-dim",
-  Marketing: "bg-electric-soft",
+  "Software & SaaS": "bg-electric",
+  "Cloud Infrastructure & DevOps": "bg-electric-soft",
+  "Enterprise SaaS & Workflow": "bg-jackson-soft",
+  "Facilities, Rent & Utilities": "bg-jackson",
+  "Logistics & Freight": "bg-vibrant",
+  "Payroll & Benefits": "bg-hotpink",
+  "Materials & COGS": "bg-cream-dim",
+  "Marketing & Ads": "bg-electric-soft",
 };
 
 const FALLBACK_PALETTE = [
@@ -78,7 +90,7 @@ const FALLBACK_PALETTE = [
   "bg-hotpink-soft",
 ];
 
-function colorFor(bucket: SpendingBucket, index: number): string {
+function colorFor(bucket: string, index: number): string {
   if (isNamedBucket(bucket) && NAMED_BUCKET_COLORS[bucket]) {
     return NAMED_BUCKET_COLORS[bucket];
   }
