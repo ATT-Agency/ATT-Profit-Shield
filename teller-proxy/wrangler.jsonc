@@ -1,0 +1,19 @@
+{
+  "name": "teller-proxy",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "6fc25b10e1617aec4ddcde35f7395836",
+
+  // Keep this Worker internal-only — it should only be reachable via the
+  // TELLER_PROXY service binding from the att-profit-shield Pages project,
+  // never via a public *.workers.dev URL.
+  "workers_dev": false,
+
+  // mTLS client cert presented during the outbound TLS handshake with
+  // api.teller.io. Worker bindings (unlike some Pages bindings) reliably
+  // honor wrangler.jsonc on deploy, which is why this proxy exists.
+  "mtls_certificates": [
+    { "binding": "TELLER_MTLS", "certificate_id": "de50f8ff-4ac2-4fba-834c-8d5d94ba94ba" }
+  ]
+}

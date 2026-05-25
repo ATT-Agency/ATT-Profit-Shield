@@ -32,9 +32,11 @@ type TellerRawTransaction = {
   } | null;
 };
 
-// Cloudflare's mTLS certificate binding exposes a Fetcher-like object whose
-// .fetch() presents the bound client cert during the outbound TLS handshake.
-type MtlsFetcher = { fetch: typeof fetch };
+// Service binding to the teller-proxy Worker. The proxy owns the mTLS
+// certificate and presents it during the outbound handshake with
+// api.teller.io; we just hand it a Teller URL and the Authorization
+// header and read back whatever Teller returns.
+type ServiceFetcher = { fetch: typeof fetch };
 
 function toNumber(v: string | number | null | undefined): number {
   if (v === null || v === undefined) return 0;
@@ -48,29 +50,30 @@ function basicAuthHeader(accessToken: string): string {
 }
 
 /**
- * Resolve the Teller mTLS Fetcher from the Cloudflare environment.
+ * Resolve the teller-proxy service binding from the Cloudflare environment.
  *
- * On Cloudflare Pages the cert/key are not passed as PEM env strings —
- * they are uploaded via `wrangler mtls-certificate upload` and surfaced as
- * a binding declared in wrangler.jsonc under `mtls_certificates`. The Web
- * `fetch()` API has no `cert`/`key` init option, so the binding's `.fetch`
- * is the only supported way to do client-cert auth from a Worker.
+ * The mTLS cert lives on a standalone Worker (see /teller-proxy) because
+ * the Pages dashboard config wasn't honoring the cert binding declared in
+ * the Pages wrangler.jsonc. The proxy Worker presents the cert; this
+ * Pages function just calls into it via the TELLER_PROXY service binding.
  */
-function getTellerFetcher(): MtlsFetcher {
+function getTellerProxy(): ServiceFetcher {
   const { env } = getRequestContext();
-  const fetcher = (env as { TELLER_MTLS?: MtlsFetcher }).TELLER_MTLS;
-  if (!fetcher) {
+  const proxy = (env as { TELLER_PROXY?: ServiceFetcher }).TELLER_PROXY;
+  if (!proxy) {
     throw new Error(
-      "Teller mTLS binding is not configured. Upload the cert via " +
-        "`wrangler mtls-certificate upload --cert certs/teller.crt --key certs/teller.key --name teller`, " +
-        "then add a TELLER_MTLS binding under `mtls_certificates` in wrangler.jsonc."
+      "TELLER_PROXY service binding is not configured. Deploy the " +
+        "teller-proxy Worker (cd teller-proxy && npx wrangler deploy), " +
+        "then ensure a TELLER_PROXY service binding pointing at " +
+        "`teller-proxy` exists on the Pages project (either via " +
+        "wrangler.jsonc or the Pages dashboard's Bindings panel)."
     );
   }
-  return fetcher;
+  return proxy;
 }
 
 async function tellerRequest<T>(
-  fetcher: MtlsFetcher,
+  fetcher: ServiceFetcher,
   url: string,
   accessToken: string
 ): Promise<T> {
@@ -111,16 +114,16 @@ export async function POST(req: Request) {
       );
     }
 
-    let fetcher: MtlsFetcher;
+    let fetcher: ServiceFetcher;
     try {
-      fetcher = getTellerFetcher();
+      fetcher = getTellerProxy();
     } catch (e) {
       return NextResponse.json(
         {
           error:
             e instanceof Error
               ? e.message
-              : "Teller mTLS binding is not configured",
+              : "TELLER_PROXY service binding is not configured",
         },
         { status: 500 }
       );

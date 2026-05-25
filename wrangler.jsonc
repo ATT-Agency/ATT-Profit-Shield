@@ -14,10 +14,13 @@
     "NEXT_PUBLIC_TELLER_APP_ID": "app_psn4rd3bce7veea470000"
   },
 
-  // Teller mTLS binding — used by /api/teller/sync to present the client
-  // cert during the TLS handshake with api.teller.io. The cert/key were
-  // uploaded via `wrangler mtls-certificate upload`; only the ID lives here.
-  "mtls_certificates": [
-    { "binding": "TELLER_MTLS", "certificate_id": "de50f8ff-4ac2-4fba-834c-8d5d94ba94ba" }
+  // Service binding to the teller-proxy Worker. The Pages project's
+  // mtls_certificates binding wasn't being honored by the dashboard config,
+  // so the mTLS cert is bound on a standalone Worker (see /teller-proxy)
+  // and the Pages function reaches it via this service binding. The cert
+  // itself is no longer bound on the Pages project — it lives on the
+  // teller-proxy Worker's wrangler.jsonc.
+  "services": [
+    { "binding": "TELLER_PROXY", "service": "teller-proxy" }
   ]
 }
