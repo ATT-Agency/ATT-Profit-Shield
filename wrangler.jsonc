@@ -4,6 +4,16 @@
   "compatibility_flags": ["nodejs_compat"],
   "pages_build_output_dir": ".vercel/output/static",
 
+  // Non-secret runtime env vars exposed to the Worker.
+  // NOTE: NEXT_PUBLIC_* values consumed by client components are inlined
+  // at `next build` time and are NOT read from this block at runtime. Set
+  // the same key in Cloudflare Pages → Settings → Environment Variables
+  // (scope: Production, type: Plain text) for the client bundle to pick
+  // it up during the Pages build.
+  "vars": {
+    "NEXT_PUBLIC_TELLER_APP_ID": "app_psn4rd3bce7veea470000"
+  },
+
   // Teller mTLS binding — used by /api/teller/sync to present the client
   // cert during the TLS handshake with api.teller.io. The cert/key were
   // uploaded via `wrangler mtls-certificate upload`; only the ID lives here.
