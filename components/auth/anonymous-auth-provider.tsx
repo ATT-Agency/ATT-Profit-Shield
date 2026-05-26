@@ -27,6 +27,10 @@ export function AnonymousAuthProvider({
   useEffect(() => {
     let cancelled = false;
     const supabase = createSupabaseBrowserClient();
+    // createSupabaseBrowserClient returns null (and logs) when the
+    // NEXT_PUBLIC_SUPABASE_* env vars are missing from the build. Bail
+    // silently rather than throwing into React's error boundary.
+    if (!supabase) return;
 
     (async () => {
       const {
