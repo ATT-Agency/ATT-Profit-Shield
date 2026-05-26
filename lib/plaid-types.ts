@@ -96,18 +96,23 @@ export type CorporateBucket = ExpenseCategory;
 export type SpendingBucket = ExpenseCategory;
 
 // ── Regex builders ─────────────────────────────────────────────────────────
-// Scan text is uppercased before matching, so all patterns target [A-Z]. We
-// treat *letters* (not the wider \w class) as the only word characters: a
-// digit or punctuation char counts as a boundary. That lets "AWS" match
-// "AWS#1234" and "AWS92" yet reject "PAWS", which a literal `\b` cannot do
-// because \b treats digits as word chars and so refuses to match between "S"
-// and "9". Two builders:
-//   tok(s) — letter boundary on both sides (when the relevant edge is a
-//            letter). Use for acronyms and full brand names that should not
-//            absorb a longer suffix (AWS, SQUARE, EY, CITI).
-//   pre(s) — leading letter boundary only. Use for stems whose suffix in
-//            real bank text varies, e.g. "DELTA AIR" must match both
-//            "DELTA AIR LINES" and "DELTA AIRLINES".
+// Scan text is uppercased before matching; all patterns target [A-Z] only.
+//
+//   tok(s) — letter-only boundary on both sides (when the relevant edge is a
+//            letter). Digits and punctuation count as gaps, so "AWS" matches
+//            "AWS#1234" / "AWS92" but rejects "PAWS". Use for acronyms and
+//            brand names that must not absorb a longer suffix.
+//
+//   pre(s) — leading letter boundary only. Use for stems whose suffix varies
+//            in real bank text (e.g. "DELTA AIR" → "DELTA AIRLINES").
+//
+//   wb(s)  — standard \b word boundaries on both sides. \b treats [A-Za-z0-9_]
+//            as word chars, so digits also act as separators. Preferred for
+//            broad industry vocabulary (RESTAURANT, GAS, INK, BAR, etc.)
+//            where the pattern is a real English word and digit adjacency is
+//            not expected. Prevents "BARK" from matching "BAR" and "BARBER"
+//            from matching "BAR", while "BAR & GRILL" and "THE PUB" still
+//            match cleanly.
 
 const REGEX_META = /[.*+?^${}()|[\]\\]/g;
 
@@ -128,15 +133,26 @@ function pre(s: string): RegExp {
   return new RegExp(`${lead}${escapeRe(t)}`);
 }
 
+function wb(s: string): RegExp {
+  return new RegExp(`\\b${escapeRe(s.trim())}\\b`);
+}
+
 // ── BUCKET_RULES ───────────────────────────────────────────────────────────
 // First match wins. Ordering is a hard contract:
-//   T1 (1-6):   Bank / payment infrastructure. Distinctive system descriptors.
-//   T2 (7-14):  Named SaaS / platform merchants. Must precede broad retail
-//               so AWS hits Cloud and not AMAZON in Consumer Goods.
-//   T3 (15-22): Operational categories with merchant overlap.
-//   T4 (23-26): Catch-all retail / consumer / transit. Evaluated last so all
-//               specifics win. Meals precedes Ground Transit so "UBER EATS"
-//               hits Meals instead of "UBER" hitting Transit.
+//   T1 (1-6):   Bank / payment infrastructure. Evaluated before all merchants
+//               so bank-system strings don't collide with brand names below.
+//   T2 (7-15):  Named SaaS / platform merchants + generic software vocabulary.
+//               Named brands precede generic wb() terms within each bucket so
+//               a named match always beats a broad keyword. "Software & SaaS"
+//               sits last in T2 to act as the generic-software catch-all only
+//               after every named SaaS platform has had a chance to match.
+//   T3 (16-23): Operational categories with merchant overlap. Named suppliers,
+//               carriers, and utilities precede their generic wb() expansions.
+//   T4 (24-27): Catch-all retail / consumer / transit. Generic dining vocab
+//               lives here so T3 operational terms (DELIVERY, SHIPPING) can
+//               still win for true logistics transactions; Meals precedes
+//               Ground Transit so "UBER EATS" hits Meals before "UBER" hits
+//               Transit.
 type BucketRule = {
   readonly bucket: ExpenseCategory;
   readonly patterns: ReadonlyArray<RegExp>;
@@ -154,6 +170,7 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
     tok("NAVY FEDERAL"), tok("PENFED"), tok("BREX"), tok("RAMP"),
     tok("MERCURY"), tok("NOVO"), tok("RELAY"), tok("RHO"),
     tok("FOREIGN TRANSACTION"), tok("INTEREST EXPENSE"),
+    tok("CREDIT UNION"), tok("UNION BANK"), tok("FED INT"), tok("WIRE IN"),
   ] },
   { bucket: "Zelle & Peer Payments", patterns: [
     tok("ZELLE"), tok("PEER TO PEER"), tok("VENMO"), tok("CASH APP"),
@@ -162,13 +179,14 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
   { bucket: "Internal Account Sweeps", patterns: [
     tok("SWEEP"), tok("INTRACO"), tok("INTERNAL TRANSFER"),
     tok("ONLINE TRANSFER"), tok("ZBA"), tok("BOOK TRANSFER"),
-    tok("ACCT XFER"),
+    tok("ACCT XFER"), tok("DEBIT XFER"), tok("ONLINE DEBIT"),
   ] },
   { bucket: "Wires & External Transfers", patterns: [
     tok("FEDWIRE"), tok("WIRE TRANSFER"), tok("DOMESTIC WIRE"),
     tok("INTL WIRE"), tok("REMITLY"), tok("PAYONEER"),
     tok("WESTERN UNION"), tok("XOOM"), tok("WISE.COM"),
     tok("TRANSFERWISE"), tok("CURRENCYFAIR"),
+    tok("ACH DEBIT"), tok("DEBIT TRANSFER"),
   ] },
   { bucket: "Corporate Card Settlements", patterns: [
     tok("CORP CARD"), tok("CREDIT CARD PMNT"), tok("AMEX EBILL"),
@@ -218,6 +236,7 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
     tok("ANTHROPIC"), tok("CLAUDE"), tok("HUGGINGFACE"),
     tok("PERPLEXITY"), tok("COHERE"), tok("VULTR"), tok("FASTLY"),
     tok("AKAMAI"), tok("DOCKER"), tok("GITLAB"), tok("BITBUCKET"),
+    wb("CLOUD"), wb("HOSTING"),
   ] },
   { bucket: "Enterprise SaaS & Workflow", patterns: [
     tok("SLACK"), tok("ZOOM"), tok("LOOM"), tok("INTERCOM"), tok("MIRO"),
@@ -230,6 +249,7 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
     tok("RAYCAST"), tok("ZENDESK"), tok("FRESHDESK"), tok("SERVICENOW"),
     tok("DROPBOX"), tok("BOX.COM"), tok("ZOHO"), tok("CALENDLY"),
     tok("GONG"), tok("OUTREACH"),
+    wb("CRM"),
   ] },
   { bucket: "Creative Tooling & Production", patterns: [
     tok("ADOBE"), tok("CANVA"), tok("ENVATO"), tok("SHUTTERSTOCK"),
@@ -250,6 +270,12 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
     tok("BING ADS"), tok("PINTEREST ADS"), tok("REDDIT ADS"),
     tok("ADROLL"), tok("TABOOLA"), tok("OUTBRAIN"), tok("YELP ADS"),
     tok("APPLE SEARCH ADS"),
+    wb("ADVERTISING"), wb("PROMO"), wb("MARKETING"), wb("SPONSOR"),
+  ] },
+  // Generic software catch-all — evaluated last in T2 so every named SaaS
+  // platform above has priority. Only reaches here for unrecognised tools.
+  { bucket: "Software & SaaS", patterns: [
+    wb("SOFTWARE"), wb("SAAS"), wb("SUBSCRIPTION"),
   ] },
 
   // ── T3: Operational with merchant overlap ────────────────────────────────
@@ -262,6 +288,8 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
     tok("ARROW ELECTRONICS"), tok("AVNET"), tok("TRACTOR SUPPLY"),
     tok("NORTHERN TOOL"), tok("RYERSON"), tok("AIRGAS"),
     tok("SHERWIN-WILLIAMS"), tok("BUILDERS FIRSTSOURCE"), tok("FASTENERS"),
+    wb("SUPPLY"), wb("SUPPLIES"), wb("WHOLESALE"), wb("DISTRIBUTOR"),
+    wb("INVENTORY"), pre("RAW MAT"), wb("HARDWARE"), wb("MANUFACTURING"),
   ] },
   { bucket: "Logistics & Freight", patterns: [
     tok("FEDEX"), tok("UPS"), tok("USPS"), tok("DHL"), tok("FLEXPORT"),
@@ -270,12 +298,15 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
     tok("XPO LOGISTICS"), tok("C.H. ROBINSON"), tok("JB HUNT"),
     tok("OLD DOMINION"), tok("SCHNEIDER"), tok("RYDER"), tok("MAERSK"),
     tok("EXPEDITORS"),
+    wb("SHIPPING"), wb("FREIGHT"), wb("CARRIER"), wb("DELIVERY"),
+    wb("TRUCKING"), tok("INVOICE COURIER"),
   ] },
   { bucket: "Insurance & Risk Management", patterns: [
     tok("GEICO"), tok("PROGRESSIVE"), tok("HARTFORD"), tok("STATE FARM"),
     tok("ALLSTATE"), tok("CHUBB"), tok("TRAVELERS"),
     tok("LIBERTY MUTUAL"), tok("NATIONWIDE"), tok("FARMERS"),
     tok("HISCOX"), tok("NEXT INSURANCE"), tok("SURE"), tok("POLICYGENIUS"),
+    wb("INSURANCE"), tok("BIZINSURE"), tok("PREMIUM PMNT"), wb("INDEMNITY"),
   ] },
   { bucket: "Legal & Professional Advisory", patterns: [
     tok("LEGALZOOM"), tok("ROCKET LAWYER"), tok("CLERKY"),
@@ -306,6 +337,8 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
     tok("SAMS CLUB"), tok("SAM'S CLUB"), tok("LENOVO"),
     tok("HEWLETT PACKARD"), tok("B&H PHOTO"), tok("MICRO CENTER"),
     tok("IKEA"),
+    wb("STATIONERY"), wb("PRINTING"), wb("INK"), wb("TONER"),
+    wb("PAPER"), wb("FURNITURE"),
   ] },
   { bucket: "Facilities, Rent & Utilities", patterns: [
     tok("WEWORK"), tok("REGUS"), tok("SPACES"), tok("COMCAST"),
@@ -315,6 +348,8 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
     tok("DUKE ENERGY"), tok("SOUTHERN CO"), tok("WASTE MGMT"),
     tok("REPUBLIC SERV"), tok("T-MOBILE"), tok("SPRINT"),
     tok("CENTURYLINK"),
+    wb("RENTAL"), wb("LEASE"), wb("ELECTRIC"), wb("UTILITIES"),
+    wb("POWER"), wb("WATER"), wb("GAS"), wb("PROPANE"), wb("SEWER"),
   ] },
 
   // ── T4: Catch-all retail / consumer / transit ────────────────────────────
@@ -332,6 +367,8 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
     tok("VISTAPRINT"), tok("PATREON"), tok("SUBSTACK"), tok("MEDIUM"),
     tok("CUSTOM INK"),
   ] },
+  // Meals precedes Ground Transit — keeps "UBER EATS" in Meals and generic
+  // dining vocab (RESTAURANT, CAFE, etc.) evaluated before "UBER" in Transit.
   { bucket: "Meals, Dining & Team Perks", patterns: [
     tok("STARBUCKS"), tok("SBUX"), tok("DUNKIN"), tok("TIM HORTONS"),
     tok("DUTCH BROS"), tok("PEETS"), tok("CARIBOU"), tok("DOORDASH"),
@@ -346,6 +383,10 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
     tok("POPEYES"), tok("PANDA EXPRESS"), tok("WINGSTOP"),
     tok("LITTLE CAESARS"), tok("JIMMY JOHNS"), tok("JERSEY MIKES"),
     tok("FIREHOUSE SUBS"), tok("CAVA"),
+    wb("RESTAURANT"), wb("DINING"), wb("CAFE"), wb("EATERY"),
+    wb("BAR"), wb("GRILL"), wb("FOOD"), wb("BISTRO"), wb("PUB"),
+    wb("KITCHEN"), wb("STEAKHOUSE"), wb("BAKERY"), wb("COFFEE"),
+    wb("CATERING"),
   ] },
   { bucket: "Ground Transit & Rideshare", patterns: [
     tok("UBER"), tok("LYFT"), tok("MTA"), tok("NYC TRANSIT"),
