@@ -16,7 +16,6 @@ import {
 } from "@/components/plaid/connection-context";
 import { ConnectTellerButton } from "@/components/plaid/connect-plaid-button";
 import {
-  classifyBucket,
   parseTransactionAmount,
   type TellerTransaction,
 } from "@/lib/plaid-types";
@@ -146,7 +145,7 @@ function toNormalized(txns: TellerTransaction[]): NormalizedTransaction[] {
     out.push({
       date: t.date,
       amount,
-      bucket: classifyBucket(t),
+      bucket: t.bucket,
     });
   }
   return out;

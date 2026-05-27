@@ -7,6 +7,7 @@ export type TellerTransaction = {
   merchantName: string | null;
   pfcPrimary: string | null;
   pfcDetailed: string | null;
+  bucket: ExpenseCategory;
 };
 
 export type TellerAccount = {
@@ -197,6 +198,7 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
     tok("IRS"), tok("USATAX"), tok("FRANCHISE TAX"),
     tok("DEPT OF REVENUE"), tok("TAX PAYMT"), tok("ESTIMATED TAX"),
     tok("FINCEN"),
+    wb("TAX"),
   ] },
 
   // ── T2: Named SaaS / platform merchants ──────────────────────────────────
@@ -321,6 +323,8 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
     pre("FRONTIER AIR"), tok("AIR CANADA"), tok("HYATT"), tok("WYNDHAM"),
     tok("IHG"), tok("BOOKING.COM"), tok("PRICELINE"), tok("KAYAK"),
     tok("VRBO"),
+    wb("ACCOMMODATION"), wb("LODGING"), wb("HOTEL"), wb("AIRLINE"),
+    wb("AIRLINES"), wb("TRAVEL"),
   ] },
   { bucket: "Automotive, Fuel & Fleet", patterns: [
     tok("SHELL OIL"), tok("EXXON"), tok("CHEVRON"), tok("7-ELEVEN"),
@@ -330,6 +334,7 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
     tok("BUDGET-CAR"), tok("VALVOLINE"), tok("SUNOCO"),
     tok("PHILLIPS 66"), tok("WEX"), tok("FLEETCOR"), tok("U-HAUL"),
     tok("PENSKE"), tok("JIFFY LUBE"), tok("O'REILLY AUTO"), tok("PEP BOYS"),
+    wb("FUEL"), wb("GASOLINE"), wb("AUTOMOTIVE"),
   ] },
   { bucket: "Office Infrastructure & IT", patterns: [
     tok("APPLE STORE"), tok("DELL"), tok("CDW"), tok("STAPLES"),
@@ -338,7 +343,7 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
     tok("HEWLETT PACKARD"), tok("B&H PHOTO"), tok("MICRO CENTER"),
     tok("IKEA"),
     wb("STATIONERY"), wb("PRINTING"), wb("INK"), wb("TONER"),
-    wb("PAPER"), wb("FURNITURE"),
+    wb("PAPER"), wb("FURNITURE"), wb("OFFICE"), wb("ELECTRONICS"),
   ] },
   { bucket: "Facilities, Rent & Utilities", patterns: [
     tok("WEWORK"), tok("REGUS"), tok("SPACES"), tok("COMCAST"),
@@ -359,6 +364,7 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
     tok("EBAY"), tok("BJ'S"), tok("KROGER"), tok("PUBLIX"),
     tok("SAFEWAY"), tok("ALBERTSONS"), tok("MEIJER"), tok("ALDI"),
     tok("HEB"), tok("WEGMANS"), tok("MACY'S"), tok("KOHL'S"),
+    wb("SHOPPING"), wb("CLOTHING"), wb("APPAREL"), wb("RETAIL"),
   ] },
   { bucket: "Corporate Subscriptions & Gifts", patterns: [
     tok("LINKEDIN PREMIUM"), tok("HBR"), tok("WALL STREET JOURNAL"),
@@ -366,6 +372,7 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
     tok("STATISTA"), tok("STICKERMULE"), tok("PRINTFUL"),
     tok("VISTAPRINT"), tok("PATREON"), tok("SUBSTACK"), tok("MEDIUM"),
     tok("CUSTOM INK"),
+    wb("ENTERTAINMENT"), wb("CHARITY"),
   ] },
   // Meals precedes Ground Transit — keeps "UBER EATS" in Meals and generic
   // dining vocab (RESTAURANT, CAFE, etc.) evaluated before "UBER" in Transit.
@@ -386,7 +393,7 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
     wb("RESTAURANT"), wb("DINING"), wb("CAFE"), wb("EATERY"),
     wb("BAR"), wb("GRILL"), wb("FOOD"), wb("BISTRO"), wb("PUB"),
     wb("KITCHEN"), wb("STEAKHOUSE"), wb("BAKERY"), wb("COFFEE"),
-    wb("CATERING"),
+    wb("CATERING"), wb("GROCERIES"), wb("GROCERY"),
   ] },
   { bucket: "Ground Transit & Rideshare", patterns: [
     tok("UBER"), tok("LYFT"), tok("MTA"), tok("NYC TRANSIT"),
@@ -395,6 +402,7 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
     tok("EZPASS"), tok("E-Z PASS"), tok("SUNPASS"), tok("FASTRAK"),
     tok("BART"), tok("WMATA"), tok("NJ TRANSIT"), tok("SEPTA"),
     tok("MBTA"), tok("DART"),
+    wb("TRANSPORT"), wb("TRANSPORTATION"), wb("PARKING"), wb("TAXI"),
   ] },
 ];
 

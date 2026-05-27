@@ -18,7 +18,6 @@ import { ConnectedBanner } from "@/components/plaid/connected-banner";
 import { COPY } from "@/lib/copy";
 import { formatCurrency } from "@/lib/utils";
 import {
-  classifyBucket,
   isNamedBucket,
   type TellerTransaction,
 } from "@/lib/plaid-types";
@@ -39,30 +38,29 @@ function bucketTotals(txns: TellerTransaction[]): Array<{ name: string; total: n
   const map = new Map<string, number>();
   for (const t of txns) {
     if (t.amount <= 0) continue;
-    const bucket = classifyBucket(t);
-    map.set(bucket, (map.get(bucket) ?? 0) + t.amount);
+    map.set(t.bucket, (map.get(t.bucket) ?? 0) + t.amount);
   }
   return Array.from(map.entries())
     .map(([name, total]) => ({ name, total }))
     .sort((a, b) => b.total - a.total);
 }
 
+const RECURRING_BUCKETS = new Set<string>([
+  "Software & SaaS",
+  "Cloud Infrastructure & DevOps",
+  "Enterprise SaaS & Workflow",
+  "Marketing Tools & Automation",
+  "Creative Tooling & Production",
+  "Corporate Subscriptions & Gifts",
+]);
+
 function estimateRecurring(txns: TellerTransaction[]) {
   const keywords = ["subscription", "monthly", "recurring", "membership", "saas", "cloud"];
   const recurring = txns.filter((t) => {
     if (t.amount <= 0) return false;
+    if (RECURRING_BUCKETS.has(t.bucket)) return true;
     const blob = `${t.merchantName ?? ""} ${t.name}`.toLowerCase();
-    const bucket = classifyBucket(t);
-    return (
-      (bucket as string) === "Software" ||
-      (bucket as string) === "Software & SaaS" ||
-      (bucket as string) === "Cloud Infrastructure & DevOps" ||
-      (bucket as string) === "Enterprise SaaS & Workflow" ||
-      (bucket as string) === "Marketing Tools & Automation" ||
-      (bucket as string) === "Creative Tooling & Production" ||
-      (bucket as string) === "Corporate Subscriptions & Gifts" ||
-      keywords.some((k) => blob.includes(k))
-    );
+    return keywords.some((k) => blob.includes(k));
   });
   return recurring.reduce((s, t) => s + t.amount, 0);
 }
@@ -138,32 +136,29 @@ function TransactionFeed({ txns }: { txns: TellerTransaction[] }) {
 
   return (
     <div className="space-y-1 max-h-[420px] overflow-y-auto pr-1">
-      {sorted.map((t) => {
-        const bucket = classifyBucket(t);
-        return (
-          <div
-            key={t.id}
-            className="flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 hover:bg-cocoa-800/60 transition-colors"
-          >
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium truncate">
-                {t.merchantName ?? t.name}
-              </p>
-              <p className="text-[11px] text-cream-mute mt-0.5">
-                {t.date} · {bucket}
-              </p>
-            </div>
-            <span
-              className={`text-sm font-semibold whitespace-nowrap ${
-                t.amount > 0 ? "text-hotpink-soft" : "text-electric-soft"
-              }`}
-            >
-              {t.amount > 0 ? "−" : "+"}
-              {formatCurrency(Math.abs(t.amount))}
-            </span>
+      {sorted.map((t) => (
+        <div
+          key={t.id}
+          className="flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 hover:bg-cocoa-800/60 transition-colors"
+        >
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium truncate">
+              {t.merchantName ?? t.name}
+            </p>
+            <p className="text-[11px] text-cream-mute mt-0.5">
+              {t.date} · {t.bucket}
+            </p>
           </div>
-        );
-      })}
+          <span
+            className={`text-sm font-semibold whitespace-nowrap ${
+              t.amount > 0 ? "text-hotpink-soft" : "text-electric-soft"
+            }`}
+          >
+            {t.amount > 0 ? "−" : "+"}
+            {formatCurrency(Math.abs(t.amount))}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 import { getRequestContext } from "@cloudflare/next-on-pages";
-import type {
-  TellerTransaction,
-  TellerAccount,
-  TellerSyncData,
+import {
+  classifyBucket,
+  type TellerTransaction,
+  type TellerAccount,
+  type TellerSyncData,
 } from "@/lib/plaid-types";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export const runtime = "edge";
 
@@ -166,17 +168,77 @@ export async function POST(req: Request) {
 
       for (const t of rawTx) {
         const amt = toNumber(t.amount);
+        const merchantName = t.details?.counterparty?.name ?? null;
+        const category = t.details?.category ?? "Uncategorized";
+        const pfcPrimary = t.details?.counterparty?.type ?? null;
+        const pfcDetailed = t.details?.category ?? null;
+        const bucket = classifyBucket({
+          name: t.description,
+          category,
+          merchantName,
+          pfcPrimary,
+          pfcDetailed,
+        });
         transactions.push({
           id: t.id,
           date: t.date,
           name: t.description,
           amount: -amt,
-          category: t.details?.category ?? "Uncategorized",
-          merchantName: t.details?.counterparty?.name ?? null,
-          pfcPrimary: t.details?.counterparty?.type ?? null,
-          pfcDetailed: t.details?.category ?? null,
+          category,
+          merchantName,
+          pfcPrimary,
+          pfcDetailed,
+          bucket,
         });
       }
+    }
+
+    // Persist pre-categorized transactions to Supabase. We resolve the
+    // calling auth user, map to the internal public.users.id required by the
+    // expenses RLS policy, and upsert by plaid_transaction_id so repeat syncs
+    // are idempotent. Persistence failure is non-fatal — we still return the
+    // freshly fetched payload so the UI keeps working when Supabase is
+    // unreachable or env vars are missing in a preview build.
+    try {
+      const supabase = createSupabaseServerClient();
+      const {
+        data: { user: authUser },
+      } = await supabase.auth.getUser();
+
+      if (authUser) {
+        const { data: userRow } = await supabase
+          .from("users")
+          .select("id")
+          .eq("auth_user_id", authUser.id)
+          .maybeSingle();
+
+        if (userRow?.id && transactions.length > 0) {
+          const rows = transactions.map((t) => ({
+            user_id: userRow.id,
+            plaid_transaction_id: t.id,
+            bucket: t.bucket,
+            merchant: t.merchantName,
+            description: t.name,
+            amount_cents: Math.round(t.amount * 100),
+            currency: "USD",
+            occurred_on: t.date,
+          }));
+          const { error: upsertError } = await supabase
+            .from("expenses")
+            .upsert(rows, { onConflict: "plaid_transaction_id" });
+          if (upsertError) {
+            console.warn(
+              "[teller-sync] expenses upsert failed:",
+              upsertError.message
+            );
+          }
+        }
+      }
+    } catch (persistErr) {
+      console.warn(
+        "[teller-sync] persistence skipped:",
+        persistErr instanceof Error ? persistErr.message : "unknown"
+      );
     }
 
     const payload: TellerSyncData = {
