@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Receipt, Wallet } from "lucide-react";
 import { ScreenHeader } from "@/components/screen-header";
 import { KpiCard } from "@/components/kpi-card";
@@ -11,6 +12,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Select } from "@/components/ui/select";
 import { EmptyState } from "@/components/empty-state";
 import { TellerConnectionProvider, useTellerConnection } from "@/components/plaid/connection-context";
 import { ConnectTellerButton } from "@/components/plaid/connect-plaid-button";
@@ -18,9 +20,13 @@ import { ConnectedBanner } from "@/components/plaid/connected-banner";
 import { COPY } from "@/lib/copy";
 import { formatCurrency } from "@/lib/utils";
 import {
+  CATEGORY_BUCKETS,
+  isExpenseTransaction,
   isNamedBucket,
+  type ExpenseCategory,
   type TellerTransaction,
 } from "@/lib/plaid-types";
+import { setTransactionCategoryOverride } from "@/app/transactions/actions";
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
@@ -31,13 +37,13 @@ function isCurrentMonth(dateStr: string) {
 }
 
 function computeSpend(txns: TellerTransaction[]) {
-  return txns.filter((t) => t.amount > 0).reduce((s, t) => s + t.amount, 0);
+  return txns.filter(isExpenseTransaction).reduce((s, t) => s + t.amount, 0);
 }
 
 function bucketTotals(txns: TellerTransaction[]): Array<{ name: string; total: number }> {
   const map = new Map<string, number>();
   for (const t of txns) {
-    if (t.amount <= 0) continue;
+    if (!isExpenseTransaction(t)) continue;
     map.set(t.bucket, (map.get(t.bucket) ?? 0) + t.amount);
   }
   return Array.from(map.entries())
@@ -57,7 +63,7 @@ const RECURRING_BUCKETS = new Set<string>([
 function estimateRecurring(txns: TellerTransaction[]) {
   const keywords = ["subscription", "monthly", "recurring", "membership", "saas", "cloud"];
   const recurring = txns.filter((t) => {
-    if (t.amount <= 0) return false;
+    if (!isExpenseTransaction(t)) return false;
     if (RECURRING_BUCKETS.has(t.bucket)) return true;
     const blob = `${t.merchantName ?? ""} ${t.name}`.toLowerCase();
     return keywords.some((k) => blob.includes(k));
@@ -129,36 +135,100 @@ function BucketBars({ txns }: { txns: TellerTransaction[] }) {
 // ── Transaction feed ──────────────────────────────────────────────────
 
 function TransactionFeed({ txns }: { txns: TellerTransaction[] }) {
+  const router = useRouter();
+  const { tellerData, setTellerData } = useTellerConnection();
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [, startTransition] = useTransition();
+
   const sorted = useMemo(
     () => [...txns].sort((a, b) => b.date.localeCompare(a.date)),
     [txns]
   );
 
+  function handleCategoryChange(t: TellerTransaction, customBucket: string) {
+    setPendingId(t.id);
+    setError(null);
+    startTransition(async () => {
+      const res = await setTransactionCategoryOverride({
+        merchantName: t.merchantName,
+        description: t.name,
+        customBucket,
+      });
+
+      if (!res.ok) {
+        setError(res.error);
+        setPendingId(null);
+        return;
+      }
+
+      if (tellerData) {
+        setTellerData({
+          ...tellerData,
+          transactions: tellerData.transactions.map((txn) =>
+            txn.id === t.id
+              ? {
+                  ...txn,
+                  bucket: customBucket as ExpenseCategory,
+                  customBucket: customBucket as ExpenseCategory,
+                }
+              : txn
+          ),
+        });
+      }
+
+      router.refresh();
+      setPendingId(null);
+    });
+  }
+
   return (
-    <div className="space-y-1 max-h-[420px] overflow-y-auto pr-1">
-      {sorted.map((t) => (
-        <div
-          key={t.id}
-          className="flex items-center justify-between gap-3 rounded-xl px-3 py-2.5 hover:bg-cocoa-800/60 transition-colors"
-        >
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium truncate">
-              {t.merchantName ?? t.name}
-            </p>
-            <p className="text-[11px] text-cream-mute mt-0.5">
-              {t.date} · {t.bucket}
-            </p>
-          </div>
-          <span
-            className={`text-sm font-semibold whitespace-nowrap ${
-              t.amount > 0 ? "text-hotpink-soft" : "text-electric-soft"
-            }`}
+    <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
+      {error && (
+        <p className="rounded-xl border border-hotpink/40 bg-hotpink/10 px-3 py-2 text-xs text-hotpink-soft">
+          {error}
+        </p>
+      )}
+      {sorted.map((t) => {
+        const isPending = pendingId === t.id;
+
+        return (
+          <div
+            key={t.id}
+            className="rounded-xl px-3 py-2.5 hover:bg-cocoa-800/60 transition-colors"
           >
-            {t.amount > 0 ? "−" : "+"}
-            {formatCurrency(Math.abs(t.amount))}
-          </span>
-        </div>
-      ))}
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium truncate">
+                  {t.merchantName ?? t.name}
+                </p>
+                <p className="text-[11px] text-cream-mute mt-0.5">{t.date}</p>
+              </div>
+              <span
+                className={`text-sm font-semibold whitespace-nowrap ${
+                  t.amount > 0 ? "text-hotpink-soft" : "text-electric-soft"
+                }`}
+              >
+                {t.amount > 0 ? "-" : "+"}
+                {formatCurrency(Math.abs(t.amount))}
+              </span>
+            </div>
+            <Select
+              aria-label={`Category for ${t.merchantName ?? t.name}`}
+              value={t.bucket}
+              disabled={isPending}
+              onChange={(e) => handleCategoryChange(t, e.currentTarget.value)}
+              className="mt-2 h-9 rounded-xl border-cocoa-600 bg-cocoa-900 px-3 py-1.5 pr-8 text-xs"
+            >
+              {CATEGORY_BUCKETS.map((category) => (
+                <option key={category} value={category}>
+                  {category}
+                </option>
+              ))}
+            </Select>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -197,7 +267,7 @@ function LeakDetectorInner() {
           value={totalSpend !== null ? formatCurrency(totalSpend) : "—"}
           hint={
             totalSpend !== null
-              ? `${activeTxns.filter((t) => t.amount > 0).length} debit transactions`
+              ? `${activeTxns.filter(isExpenseTransaction).length} debit transactions`
               : "Available after Teller sync."
           }
           tone={totalSpend !== null ? "warn" : "neutral"}
