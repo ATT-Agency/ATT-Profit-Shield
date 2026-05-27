@@ -13,6 +13,7 @@ export default async function ForecastPage() {
   const materials: ForecastMaterial[] = rows.map((r) => ({
     id: r.id,
     name: r.name,
+    unit: r.unit,
     quantity: r.quantity,
     baseline_cost: r.baseline_cost,
     annualDriftPct: r.annualDriftPct,

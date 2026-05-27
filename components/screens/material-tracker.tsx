@@ -12,6 +12,7 @@ import { COPY } from "@/lib/copy";
 import { formatCurrency, formatPercent } from "@/lib/utils";
 import { Boxes, Plus, Trash2, Activity, Sliders } from "lucide-react";
 import { createMaterial, deleteMaterial } from "@/app/materials/actions";
+import { annualizeMultiplier } from "@/lib/forecast";
 
 export type TrackedMaterial = {
   id: string;
@@ -56,9 +57,13 @@ export function MaterialTracker({ materials }: { materials: TrackedMaterial[] })
     });
   }
 
+  // Annualize each line (mo→×12, hr→×2080, etc.) before applying drift so
+  // monthly subscriptions and hourly contractors don't understate the
+  // exposure relative to per-year materials.
   const blendedExposure = materials.reduce((sum, m) => {
     if (m.annualDriftPct === null) return sum;
-    return sum + m.baseline_cost * m.quantity * (m.annualDriftPct / 100);
+    const annualLine = m.baseline_cost * m.quantity * annualizeMultiplier(m.unit);
+    return sum + annualLine * (m.annualDriftPct / 100);
   }, 0);
 
   return (
@@ -246,10 +251,10 @@ export function MaterialTracker({ materials }: { materials: TrackedMaterial[] })
         ) : (
           materials.map((m) => {
             const drift = m.annualDriftPct;
+            const annualLine =
+              m.baseline_cost * m.quantity * annualizeMultiplier(m.unit);
             const dollarHit =
-              drift === null
-                ? null
-                : m.baseline_cost * m.quantity * (drift / 100);
+              drift === null ? null : annualLine * (drift / 100);
             const commodity =
               m.tracking_mode === "fred" && m.fred_ppi_code
                 ? COMMODITY_CATALOG.find((c) => c.code === m.fred_ppi_code)

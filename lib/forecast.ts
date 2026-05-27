@@ -14,10 +14,68 @@
 export type ForecastMaterial = {
   id: string;
   name: string;
+  unit: string;
   quantity: number;
   baseline_cost: number;
   annualDriftPct: number | null; // null → treat as 0% drift
 };
+
+// ── Unit normalization ─────────────────────────────────────────────────
+// All downstream math operates on an annualized basis. A material priced
+// "$200 / mo" must be lifted to $2,400 / yr before it joins the COGS sum;
+// otherwise quarterly and yearly horizons collapse to noise. Anything we
+// don't recognise (physical units like "lbs", "kg", or the default "unit")
+// passes through unchanged with multiplier 1.
+//
+//   hr / hour   → 2080  (40h × 52w — standard US working year)
+//   day         → 365
+//   wk / week   → 52
+//   mo / month  → 12
+//   qtr / quarter → 4
+//   yr / year   → 1
+//
+// Matching is case-insensitive and tolerant of trailing punctuation /
+// pluralization ("mo.", "months", "HR") so user-typed units don't slip
+// through the cracks.
+export function annualizeMultiplier(unit: string | null | undefined): number {
+  if (!unit) return 1;
+  const u = unit.trim().toLowerCase().replace(/[.\s]+$/g, "");
+  switch (u) {
+    case "hr":
+    case "hrs":
+    case "hour":
+    case "hours":
+      return 2080;
+    case "day":
+    case "days":
+    case "d":
+      return 365;
+    case "wk":
+    case "wks":
+    case "week":
+    case "weeks":
+      return 52;
+    case "mo":
+    case "mos":
+    case "month":
+    case "months":
+      return 12;
+    case "qtr":
+    case "qtrs":
+    case "quarter":
+    case "quarters":
+      return 4;
+    case "yr":
+    case "yrs":
+    case "year":
+    case "years":
+    case "annual":
+    case "annum":
+      return 1;
+    default:
+      return 1;
+  }
+}
 
 export type MaterialsForecastInput = {
   materials: ForecastMaterial[];
@@ -40,11 +98,20 @@ export type MaterialsForecastRow = {
 };
 
 // ── Building blocks ────────────────────────────────────────────────────
+//
+// `lineCost` returns the *annualized* dollar cost of one material line:
+//   baseline_cost × quantity × annualizeMultiplier(unit)
+//
+// A $200/mo SaaS line with quantity=1 yields $2,400/yr. A $25/hr contractor
+// at quantity=1 yields $52,000/yr. Anything denominated in a non-time unit
+// (lbs, kg, "unit", "" ) passes through with multiplier 1 — i.e. it's
+// already a per-product/year input.
 
 function lineCost(m: ForecastMaterial): number {
-  return m.baseline_cost * m.quantity;
+  return m.baseline_cost * m.quantity * annualizeMultiplier(m.unit);
 }
 
+/** Annualized COGS across all materials. */
 export function computeCogs(materials: ForecastMaterial[]): number {
   return materials.reduce((s, m) => s + lineCost(m), 0);
 }
@@ -66,15 +133,24 @@ export function driftPctAt(horizonDays: number, materials: ForecastMaterial[]): 
   return annual * (horizonDays / 365);
 }
 
-/** Project each material's cost forward and re-sum. */
+/**
+ * Projected COGS for the given horizon window.
+ *
+ * `lineCost` returns annualized dollars, so we (a) prorate drift to the
+ * horizon, (b) apply it to each line, and (c) scale the whole sum down to
+ * the horizon's share of the year. The result is the dollar COGS the
+ * business is expected to absorb over `horizonDays` at the projected
+ * vendor prices.
+ */
 export function computeProjectedCogs(
   materials: ForecastMaterial[],
   horizonDays: number
 ): number {
+  const horizonFrac = horizonDays / 365;
   return materials.reduce((s, m) => {
     const annual = m.annualDriftPct ?? 0;
-    const drift = annual * (horizonDays / 365) / 100;
-    return s + lineCost(m) * (1 + drift);
+    const drift = (annual * horizonFrac) / 100;
+    return s + lineCost(m) * (1 + drift) * horizonFrac;
   }, 0);
 }
 
@@ -82,7 +158,10 @@ export function computeProjectedCogs(
 
 export function materialsForecastAt(input: MaterialsForecastInput): MaterialsForecastRow {
   const { materials, marginPct, horizonDays } = input;
-  const cogs = computeCogs(materials);
+  // computeCogs returns annualized dollars; scale to the horizon window so
+  // baseline and projected sit on the same time basis before differencing.
+  const horizonFrac = horizonDays / 365;
+  const cogs = computeCogs(materials) * horizonFrac;
   const projectedCogs = computeProjectedCogs(materials, horizonDays);
   const cogsDelta = projectedCogs - cogs;
   const driftPct = cogs > 0 ? (cogsDelta / cogs) * 100 : 0;
@@ -131,17 +210,21 @@ export function materialsForecastCurve(
   step = 5
 ): ForecastCurvePoint[] {
   const marginFrac = Math.min(Math.max(marginPct / 100, 0), 0.99);
-  const baseCogs = computeCogs(materials);
-  const baseRevenue = baseCogs / (1 - marginFrac);
+  const annualCogs = computeCogs(materials);
 
   const out: ForecastCurvePoint[] = [];
   for (let d = 0; d <= maxDays; d += step) {
+    // Both baseline and projected lines are window-scoped (annual × d/365)
+    // so the chart shows cumulative COGS over the horizon and the gap
+    // between the two lines equals the dollar exposure at day d.
+    const horizonFrac = d / 365;
+    const baselineCogsAtD = annualCogs * horizonFrac;
     const projectedCogs = computeProjectedCogs(materials, d);
     out.push({
       day: d,
-      cogs: baseCogs,
+      cogs: baselineCogsAtD,
       projectedCogs,
-      revenue: baseRevenue,
+      revenue: baselineCogsAtD / (1 - marginFrac),
       requiredRevenue: projectedCogs / (1 - marginFrac),
     });
   }
