@@ -84,12 +84,12 @@ async function loadCategoryOverrides(): Promise<MerchantCategoryOverride[]> {
 }
 
 function isTellerInflow(t: TellerRawTransaction, amount: number): boolean {
+  if (amount > 0) return false;
+  if (amount < 0) return true;
+
   const type = (t.type ?? "").toLowerCase();
   if (/(credit|deposit)/.test(type)) return true;
   if (/(debit|withdraw|payment|purchase)/.test(type)) return false;
-
-  if (amount > 0) return true;
-  if (amount < 0) return false;
 
   return isInflowTransaction({
     name: t.description,
@@ -233,9 +233,7 @@ export async function POST(req: Request) {
           pfcPrimary,
           pfcDetailed,
         };
-        const bucket = isInflow
-          ? REVENUE_BUCKET
-          : classifyBucket(baseTransaction, categoryOverrides);
+        const bucket = classifyBucket(baseTransaction, categoryOverrides);
         transactions.push({
           id: t.id,
           date: t.date,

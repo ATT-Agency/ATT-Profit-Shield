@@ -528,11 +528,11 @@ export function classifyBucket(
   t: ClassifiableTxn,
   overrides: readonly MerchantCategoryOverride[] = []
 ): ExpenseCategory {
-  if (isInflowTransaction(t)) return REVENUE_BUCKET;
   if (isKnownBucket(t.customBucket)) return t.customBucket;
 
   const overrideBucket = findCategoryOverride(t, overrides);
   if (overrideBucket) return overrideBucket;
+  if (isInflowTransaction(t)) return REVENUE_BUCKET;
   if (isKnownBucket(t.bucket)) return t.bucket;
 
   // Pass 1 — merchant fields only. `merchantName` and the bank's free-text
