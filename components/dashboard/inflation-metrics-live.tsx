@@ -16,6 +16,7 @@ import {
 } from "@/components/plaid/connection-context";
 import { ConnectTellerButton } from "@/components/plaid/connect-plaid-button";
 import {
+  isExpenseTransaction,
   parseTransactionAmount,
   type TellerTransaction,
 } from "@/lib/plaid-types";
@@ -141,7 +142,7 @@ function toNormalized(txns: TellerTransaction[]): NormalizedTransaction[] {
   for (const t of txns) {
     if (!t?.date) continue;
     const amount = parseTransactionAmount(t.amount);
-    if (amount <= 0) continue;
+    if (!isExpenseTransaction(t)) continue;
     out.push({
       date: t.date,
       amount,

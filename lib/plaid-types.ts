@@ -8,6 +8,7 @@ export type TellerTransaction = {
   pfcPrimary: string | null;
   pfcDetailed: string | null;
   bucket: ExpenseCategory;
+  customBucket?: ExpenseCategory | null;
 };
 
 export type TellerAccount = {
@@ -30,6 +31,7 @@ export type PlaidAccount = TellerAccount;
 export type PlaidExchangeData = TellerSyncData;
 
 export type ExpenseCategory =
+  | "Revenue & Deposits"
   | "Zelle & Peer Payments"
   | "Internal Account Sweeps"
   | "Wires & External Transfers"
@@ -60,6 +62,7 @@ export type ExpenseCategory =
   | "Other Operational Overhead";
 
 export const NAMED_BUCKETS = [
+  "Revenue & Deposits",
   "Zelle & Peer Payments",
   "Internal Account Sweeps",
   "Wires & External Transfers",
@@ -91,10 +94,18 @@ export const NAMED_BUCKETS = [
 
 export type NamedBucket = (typeof NAMED_BUCKETS)[number];
 
+export const REVENUE_BUCKET: ExpenseCategory = "Revenue & Deposits";
 export const FALLBACK_BUCKET: ExpenseCategory = "Other Operational Overhead";
+export const CATEGORY_BUCKETS = [...NAMED_BUCKETS, FALLBACK_BUCKET] as const;
 export type FallbackBucket = typeof FALLBACK_BUCKET;
 export type CorporateBucket = ExpenseCategory;
 export type SpendingBucket = ExpenseCategory;
+
+export type MerchantCategoryOverride = {
+  merchant_name: string | null;
+  description_pattern: string | null;
+  custom_bucket: ExpenseCategory;
+};
 
 // ── Regex builders ─────────────────────────────────────────────────────────
 // Scan text is uppercased before matching; all patterns target [A-Z] only.
@@ -406,6 +417,19 @@ const BUCKET_RULES: ReadonlyArray<BucketRule> = [
   ] },
 ];
 
+const INFLOW_RULES: readonly RegExp[] = [
+  tok("ACH CREDIT"), tok("ACH DEP"), tok("ACH DEPOSIT"),
+  tok("CREDIT TRANSFER"), tok("DIRECT DEPOSIT"), tok("ELECTRONIC DEPOSIT"),
+  tok("INCOMING ACH"), tok("INCOMING WIRE"), tok("INTEREST CREDIT"),
+  tok("INTEREST PAID"), tok("INTERNET BANKING TRANSFER DEPOSIT"),
+  tok("MOBILE DEPOSIT"), tok("ONLINE BANKING TRANSFER DEPOSIT"),
+  tok("REMOTE DEPOSIT"), tok("TRANSFER DEPOSIT"),
+  tok("TRANSFER FROM EXTERNAL"), tok("WIRE CREDIT"), tok("WIRE DEPOSIT"),
+  tok("ZELLE DEPOSIT"), tok("ZELLE RECEIVED"), tok("ZELLE CREDIT"),
+  tok("REFUND"),
+  pre("CREDIT"), pre("CR "), pre("DEP "), pre("DEPOSIT"),
+];
+
 export function parseTransactionAmount(
   amount: string | number | null | undefined
 ): number {
@@ -419,9 +443,12 @@ export function parseTransactionAmount(
 export type ClassifiableTxn = {
   name: string;
   category: string;
+  amount?: string | number | null;
+  bucket?: ExpenseCategory;
   merchantName?: string | null;
   pfcPrimary?: string | null;
   pfcDetailed?: string | null;
+  customBucket?: ExpenseCategory | null;
 };
 
 // Concatenate the supplied fields into one uppercase, single-spaced scan
@@ -448,7 +475,66 @@ function scanRules(text: string): ExpenseCategory | null {
   return null;
 }
 
-export function classifyBucket(t: ClassifiableTxn): ExpenseCategory {
+function normalizeMatcherText(value: string | null | undefined): string {
+  return (value ?? "").toUpperCase().replace(/\s+/g, " ").trim();
+}
+
+function isKnownBucket(bucket: string | null | undefined): bucket is ExpenseCategory {
+  return (CATEGORY_BUCKETS as readonly string[]).includes(bucket ?? "");
+}
+
+function scanInflow(text: string): boolean {
+  return text.length > 0 && INFLOW_RULES.some((pattern) => pattern.test(text));
+}
+
+export function isInflowTransaction(t: ClassifiableTxn): boolean {
+  if (t.amount !== undefined && t.amount !== null) {
+    const amount = parseTransactionAmount(t.amount);
+    if (amount < 0) return true;
+    if (amount > 0) return false;
+  }
+
+  return (
+    scanInflow(joinFields(t.merchantName, t.name)) ||
+    scanInflow(joinFields(t.category, t.pfcDetailed, t.pfcPrimary))
+  );
+}
+
+export function findCategoryOverride(
+  t: ClassifiableTxn,
+  overrides: readonly MerchantCategoryOverride[] = []
+): ExpenseCategory | null {
+  const merchant = normalizeMatcherText(t.merchantName);
+  const description = normalizeMatcherText(t.name);
+
+  for (const override of overrides) {
+    if (!isKnownBucket(override.custom_bucket)) continue;
+
+    const overrideMerchant = normalizeMatcherText(override.merchant_name);
+    if (overrideMerchant && merchant && overrideMerchant === merchant) {
+      return override.custom_bucket;
+    }
+
+    const pattern = normalizeMatcherText(override.description_pattern);
+    if (pattern && description && description.includes(pattern)) {
+      return override.custom_bucket;
+    }
+  }
+
+  return null;
+}
+
+export function classifyBucket(
+  t: ClassifiableTxn,
+  overrides: readonly MerchantCategoryOverride[] = []
+): ExpenseCategory {
+  if (isInflowTransaction(t)) return REVENUE_BUCKET;
+  if (isKnownBucket(t.customBucket)) return t.customBucket;
+
+  const overrideBucket = findCategoryOverride(t, overrides);
+  if (overrideBucket) return overrideBucket;
+  if (isKnownBucket(t.bucket)) return t.bucket;
+
   // Pass 1 — merchant fields only. `merchantName` and the bank's free-text
   // `name` are the authoritative source of who got paid. We never let
   // Teller's coarse `category` taxonomy bleed into this pass; a generic
@@ -468,6 +554,11 @@ export function classifyBucket(t: ClassifiableTxn): ExpenseCategory {
 
 export function isNamedBucket(b: string): b is NamedBucket {
   return (NAMED_BUCKETS as readonly string[]).includes(b);
+}
+
+export function isExpenseTransaction(t: ClassifiableTxn): boolean {
+  const amount = parseTransactionAmount(t.amount);
+  return amount > 0 && classifyBucket(t) !== REVENUE_BUCKET;
 }
 
 export function normalizeTransaction(

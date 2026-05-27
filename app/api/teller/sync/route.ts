@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { getRequestContext } from "@cloudflare/next-on-pages";
 import {
   classifyBucket,
+  isInflowTransaction,
+  REVENUE_BUCKET,
+  type MerchantCategoryOverride,
   type TellerTransaction,
   type TellerAccount,
   type TellerSyncData,
@@ -49,6 +52,53 @@ function toNumber(v: string | number | null | undefined): number {
 
 function basicAuthHeader(accessToken: string): string {
   return `Basic ${btoa(`${accessToken}:`)}`;
+}
+
+async function loadCategoryOverrides(): Promise<MerchantCategoryOverride[]> {
+  try {
+    const supabase = createSupabaseServerClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) return [];
+
+    const { data, error } = await supabase
+      .from("merchant_category_overrides")
+      .select("merchant_name, description_pattern, custom_bucket")
+      .eq("user_id", user.id);
+
+    if (error) {
+      console.warn("[Teller] category override lookup failed:", error.message);
+      return [];
+    }
+
+    return (data ?? []) as MerchantCategoryOverride[];
+  } catch (e) {
+    console.warn(
+      "[Teller] category override lookup skipped:",
+      e instanceof Error ? e.message : "unknown"
+    );
+    return [];
+  }
+}
+
+function isTellerInflow(t: TellerRawTransaction, amount: number): boolean {
+  const type = (t.type ?? "").toLowerCase();
+  if (/(credit|deposit)/.test(type)) return true;
+  if (/(debit|withdraw|payment|purchase)/.test(type)) return false;
+
+  if (amount > 0) return true;
+  if (amount < 0) return false;
+
+  return isInflowTransaction({
+    name: t.description,
+    amount,
+    category: t.details?.category ?? "",
+    merchantName: t.details?.counterparty?.name ?? null,
+    pfcPrimary: t.details?.counterparty?.type ?? null,
+    pfcDetailed: t.details?.category ?? null,
+  });
 }
 
 /**
@@ -140,6 +190,7 @@ export async function POST(req: Request) {
     const accounts: TellerAccount[] = [];
     const transactions: TellerTransaction[] = [];
     let institutionName: string | null = null;
+    const categoryOverrides = await loadCategoryOverrides();
 
     for (const a of rawAccounts) {
       if (!institutionName && a.institution?.name) {
@@ -168,27 +219,34 @@ export async function POST(req: Request) {
 
       for (const t of rawTx) {
         const amt = toNumber(t.amount);
+        const isInflow = isTellerInflow(t, amt);
+        const amount = isInflow ? -Math.abs(amt) : Math.abs(amt);
         const merchantName = t.details?.counterparty?.name ?? null;
         const category = t.details?.category ?? "Uncategorized";
         const pfcPrimary = t.details?.counterparty?.type ?? null;
         const pfcDetailed = t.details?.category ?? null;
-        const bucket = classifyBucket({
+        const baseTransaction = {
           name: t.description,
+          amount,
           category,
           merchantName,
           pfcPrimary,
           pfcDetailed,
-        });
+        };
+        const bucket = isInflow
+          ? REVENUE_BUCKET
+          : classifyBucket(baseTransaction, categoryOverrides);
         transactions.push({
           id: t.id,
           date: t.date,
           name: t.description,
-          amount: -amt,
+          amount,
           category,
           merchantName,
           pfcPrimary,
           pfcDetailed,
           bucket,
+          customBucket: bucket,
         });
       }
     }
@@ -213,24 +271,28 @@ export async function POST(req: Request) {
           .maybeSingle();
 
         if (userRow?.id && transactions.length > 0) {
-          const rows = transactions.map((t) => ({
-            user_id: userRow.id,
-            plaid_transaction_id: t.id,
-            bucket: t.bucket,
-            merchant: t.merchantName,
-            description: t.name,
-            amount_cents: Math.round(t.amount * 100),
-            currency: "USD",
-            occurred_on: t.date,
-          }));
-          const { error: upsertError } = await supabase
-            .from("expenses")
-            .upsert(rows, { onConflict: "plaid_transaction_id" });
-          if (upsertError) {
-            console.warn(
-              "[teller-sync] expenses upsert failed:",
-              upsertError.message
-            );
+          const rows = transactions
+            .filter((t) => t.amount > 0 && t.bucket !== REVENUE_BUCKET)
+            .map((t) => ({
+              user_id: userRow.id,
+              plaid_transaction_id: t.id,
+              bucket: t.bucket,
+              merchant: t.merchantName,
+              description: t.name,
+              amount_cents: Math.round(t.amount * 100),
+              currency: "USD",
+              occurred_on: t.date,
+            }));
+          if (rows.length > 0) {
+            const { error: upsertError } = await supabase
+              .from("expenses")
+              .upsert(rows, { onConflict: "plaid_transaction_id" });
+            if (upsertError) {
+              console.warn(
+                "[teller-sync] expenses upsert failed:",
+                upsertError.message
+              );
+            }
           }
         }
       }

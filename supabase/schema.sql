@@ -90,6 +90,21 @@ create table if not exists public.predictive_snapshots (
 create index if not exists predictive_snapshots_user_idx
   on public.predictive_snapshots (user_id, computed_at desc);
 
+-- 5. merchant_category_overrides
+create table if not exists public.merchant_category_overrides (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  merchant_name text,
+  description_pattern text,
+  custom_bucket text not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists merchant_category_overrides_user_merchant_idx
+  on public.merchant_category_overrides (user_id, merchant_name);
+create index if not exists merchant_category_overrides_user_description_idx
+  on public.merchant_category_overrides (user_id, description_pattern);
+
 -- Auto-update timestamps
 create or replace function public.touch_updated_at()
 returns trigger language plpgsql as $$
@@ -112,6 +127,7 @@ alter table public.users enable row level security;
 alter table public.expenses enable row level security;
 alter table public.material_costs enable row level security;
 alter table public.predictive_snapshots enable row level security;
+alter table public.merchant_category_overrides enable row level security;
 
 create policy "user reads own profile" on public.users
   for select using (auth_user_id = auth.uid());
@@ -129,6 +145,28 @@ create policy "user owns forecasts" on public.predictive_snapshots
   for all
   using (user_id in (select id from public.users where auth_user_id = auth.uid()))
   with check (user_id in (select id from public.users where auth_user_id = auth.uid()));
+
+drop policy if exists "user reads own merchant category overrides"
+  on public.merchant_category_overrides;
+drop policy if exists "user inserts own merchant category overrides"
+  on public.merchant_category_overrides;
+drop policy if exists "user updates own merchant category overrides"
+  on public.merchant_category_overrides;
+drop policy if exists "user deletes own merchant category overrides"
+  on public.merchant_category_overrides;
+
+create policy "user reads own merchant category overrides"
+  on public.merchant_category_overrides
+  for select using (user_id = auth.uid());
+create policy "user inserts own merchant category overrides"
+  on public.merchant_category_overrides
+  for insert with check (user_id = auth.uid());
+create policy "user updates own merchant category overrides"
+  on public.merchant_category_overrides
+  for update using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy "user deletes own merchant category overrides"
+  on public.merchant_category_overrides
+  for delete using (user_id = auth.uid());
 
 -- Drop the previous prototype anon policies (these allowed cross-tenant reads
 -- and were the source of the material_costs shared-state leak).
