@@ -7,9 +7,9 @@
  * benchmarks, and lets the user enter the actual quoted vendor price increase
  * directly into the row. Overage vs. FRED is computed live.
  *
- * Emails are sent via the user's connected Gmail or Outlook account — no
- * platform domain required. Connect / disconnect buttons live at the top of
- * this screen. Token refresh is handled transparently by /api/email/send.
+ * Emails are sent via the user's connected Gmail account — no platform domain
+ * required. Connect / disconnect controls live at the top of this screen.
+ * Token refresh is handled transparently by /api/email/send.
  */
 
 import { useState, useEffect, useMemo, useRef, useId } from "react";
@@ -45,7 +45,7 @@ type FilterStatus = "all" | NegotiationStatus;
 
 /** Shared with app/negotiate/page.tsx (server component). */
 export type EmailConnectionStatus = {
-  platform: "google" | "microsoft" | null;
+  platform: "google" | null;
   email: string | null;
   name: string | null;
 };
@@ -308,7 +308,6 @@ function MathBreakdown({
               isOverage ? "text-hotpink-soft" : "text-electric-soft"
             )}
           >
-            {isOverage ? "+" : ""}
             {formatPercent(c.overagePct)}
           </p>
         </div>
@@ -349,12 +348,7 @@ function VendorCard({
   const emailConnected = emailConnection.platform !== null;
   const canSend = hasQuote && vendor.contactEmail.trim().length > 0 && emailConnected;
   const senderName = emailConnection.name;
-  const providerLabel =
-    emailConnection.platform === "google"
-      ? "Gmail"
-      : emailConnection.platform === "microsoft"
-      ? "Outlook"
-      : "Email";
+  const providerLabel = "Gmail";
 
   function copyEmail() {
     navigator.clipboard
@@ -469,7 +463,7 @@ function VendorCard({
                   : "text-cream-mute"
               )}
             >
-              {hasQuote ? `${isOverage ? "+" : ""}${formatPercent(c.overagePct)}` : "—"}
+              {hasQuote ? formatPercent(c.overagePct) : "—"}
             </p>
           </div>
           <div>
@@ -559,7 +553,7 @@ function VendorCard({
                     disabled={!canSend || sending}
                     title={
                       !emailConnected
-                        ? "Connect Gmail or Outlook at the top of this page to send"
+                        ? "Connect Gmail at the top of this page to send"
                         : !hasQuote
                         ? "Enter a quoted unit cost first"
                         : !vendor.contactEmail.trim()
@@ -600,7 +594,7 @@ function VendorCard({
                 <Info className="size-3.5" />
                 {emailConnection.email
                   ? `Sent from ${emailConnection.email} via ${providerLabel}.`
-                  : "Connect Gmail or Outlook above to enable sending."}
+                  : "Connect Gmail above to enable sending."}
               </p>
             </div>
           )}
@@ -928,7 +922,7 @@ export function NegotiationToolScreen({
     if (connected) {
       setOauthBanner({
         ok: true,
-        message: `${connected === "google" ? "Gmail" : "Outlook"} connected successfully.`,
+        message: "Gmail connected successfully.",
       });
     } else if (error) {
       setOauthBanner({ ok: false, message: decodeURIComponent(error) });
@@ -940,17 +934,17 @@ export function NegotiationToolScreen({
     }
   }, []);
 
-  async function handleDisconnect(platform: "google" | "microsoft") {
+  async function handleDisconnect() {
     setDisconnecting(true);
     try {
-      const res = await fetch(`/api/auth/${platform}/disconnect`, {
+      const res = await fetch("/api/auth/google/disconnect", {
         method: "POST",
       });
       if (res.ok) {
         setEmailConn({ platform: null, email: null, name: null });
         setOauthBanner({
           ok: true,
-          message: `${platform === "google" ? "Gmail" : "Outlook"} disconnected.`,
+          message: "Gmail disconnected.",
         });
       } else {
         const d = await res.json();
@@ -1169,19 +1163,12 @@ export function NegotiationToolScreen({
         {emailConn.platform ? (
           // ── Connected state ──────────────────────────────────────────────
           <div className="flex items-center gap-3 flex-wrap">
-            <div
-              className={cn(
-                "size-8 rounded-xl flex items-center justify-center shrink-0",
-                emailConn.platform === "google"
-                  ? "bg-white/10"
-                  : "bg-blue-900/30"
-              )}
-            >
+            <div className="size-8 rounded-xl flex items-center justify-center shrink-0 bg-white/10">
               <Mail className="size-4 text-vibrant" />
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-[10px] uppercase tracking-[0.18em] text-cream-mute">
-                {emailConn.platform === "google" ? "Gmail" : "Outlook"} connected
+                Gmail connected
               </p>
               <p className="text-sm text-cream truncate">
                 {emailConn.email}
@@ -1193,7 +1180,7 @@ export function NegotiationToolScreen({
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => handleDisconnect(emailConn.platform!)}
+              onClick={handleDisconnect}
               disabled={disconnecting}
               className="text-cream-mute shrink-0"
             >
@@ -1225,16 +1212,6 @@ export function NegotiationToolScreen({
               >
                 <Mail className="size-3.5" />
                 Connect Gmail
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  window.location.href = "/api/auth/microsoft/connect";
-                }}
-              >
-                <Mail className="size-3.5" />
-                Connect Outlook
               </Button>
             </div>
           </div>

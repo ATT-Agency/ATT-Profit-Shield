@@ -26,6 +26,7 @@ export type TellerConnection = {
 
 const SS_TOKEN_KEY = "teller_auth_token";
 const SS_INST_KEY = "teller_inst_name";
+const SS_DATA_KEY = "teller_sync_data";
 
 const Ctx = createContext<TellerConnection | null>(null);
 
@@ -34,26 +35,38 @@ export function TellerConnectionProvider({ children }: { children: ReactNode }) 
   const [loading, setLoading] = useState(false);
   const [institutionName, setInstitutionName] = useState<string | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [tellerData, setTellerData] = useState<TellerSyncData | null>(null);
+  const [tellerData, setTellerDataState] = useState<TellerSyncData | null>(null);
 
-  const syncTellerData = useCallback(async (token: string): Promise<void> => {
-    setLoading(true);
+  const setTellerData = useCallback((data: TellerSyncData) => {
+    setTellerDataState(data);
     try {
-      const res = await fetch("/api/teller/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accessToken: token }),
-      });
-      if (!res.ok) {
-        const err = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(err.error ?? `Sync failed (${res.status})`);
-      }
-      const data = (await res.json()) as TellerSyncData;
-      setTellerData(data);
-    } finally {
-      setLoading(false);
+      sessionStorage.setItem(SS_DATA_KEY, JSON.stringify(data));
+    } catch {
+      // ignore quota / disabled-storage failures
     }
   }, []);
+
+  const syncTellerData = useCallback(
+    async (token: string): Promise<void> => {
+      setLoading(true);
+      try {
+        const res = await fetch("/api/teller/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accessToken: token }),
+        });
+        if (!res.ok) {
+          const err = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(err.error ?? `Sync failed (${res.status})`);
+        }
+        const data = (await res.json()) as TellerSyncData;
+        setTellerData(data);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [setTellerData]
+  );
 
   const markConnected = useCallback(
     (token: string, institution: string | null) => {
@@ -74,17 +87,20 @@ export function TellerConnectionProvider({ children }: { children: ReactNode }) 
     setConnected(false);
     setAccessToken(null);
     setInstitutionName(null);
-    setTellerData(null);
+    setTellerDataState(null);
     setLoading(false);
     try {
       sessionStorage.removeItem(SS_TOKEN_KEY);
       sessionStorage.removeItem(SS_INST_KEY);
+      sessionStorage.removeItem(SS_DATA_KEY);
     } catch {
       // ignore quota / disabled-storage failures
     }
   }, []);
 
-  // Restore session on mount — tab lifetime only (sessionStorage evicted on close).
+  // Restore session on mount — tab lifetime only (sessionStorage evicted on
+  // close). If cached sync data is present, hydrate from it immediately so
+  // screens render without a refetch; otherwise pull fresh data for the token.
   useEffect(() => {
     try {
       const token = sessionStorage.getItem(SS_TOKEN_KEY);
@@ -93,6 +109,17 @@ export function TellerConnectionProvider({ children }: { children: ReactNode }) 
       setAccessToken(token);
       setInstitutionName(inst);
       setConnected(true);
+
+      const cachedRaw = sessionStorage.getItem(SS_DATA_KEY);
+      if (cachedRaw) {
+        try {
+          setTellerDataState(JSON.parse(cachedRaw) as TellerSyncData);
+          return; // skip refetch — cached snapshot is good for this tab
+        } catch {
+          sessionStorage.removeItem(SS_DATA_KEY);
+        }
+      }
+
       syncTellerData(token).catch((e) =>
         console.warn("[Teller] session restore failed:", e)
       );
@@ -114,7 +141,7 @@ export function TellerConnectionProvider({ children }: { children: ReactNode }) 
       syncTellerData,
       reset,
     }),
-    [connected, loading, institutionName, accessToken, tellerData, markConnected, syncTellerData, reset]
+    [connected, loading, institutionName, accessToken, tellerData, markConnected, setTellerData, syncTellerData, reset]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

@@ -1361,7 +1361,6 @@ export function YieldTrackerScreen() {
                         yc
                       )}
                     >
-                      {row.hidden_inflation_pct > 0 ? "+" : ""}
                       {formatPercent(row.hidden_inflation_pct)}
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-cream-dim">

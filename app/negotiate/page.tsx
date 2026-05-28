@@ -11,15 +11,13 @@ import type { EmailConnectionStatus } from "@/components/screens/negotiation-too
  *   - initialMaterials: tracked material cost rows enriched with live FRED PPI
  *   - businessName:     caller's company name from public.users (for email signature)
  *   - userEmail:        caller's auth email (shown in the sender info bar)
- *   - emailConnection:  active Google / Microsoft email connection, if any
+ *   - emailConnection:  active Google email connection, if any
  *
  * Required env vars:
  *   FRED_API_KEY          St. Louis Fed (live PPI benchmarks)
- *   RESEND_API_KEY        Not used after Gmail/Outlook OAuth — kept for legacy
+ *   RESEND_API_KEY        Not used after Gmail OAuth — kept for legacy
  *   GOOGLE_CLIENT_ID      Google Cloud Console OAuth 2.0 client ID
  *   GOOGLE_CLIENT_SECRET  Google Cloud Console OAuth 2.0 client secret
- *   MICROSOFT_CLIENT_ID   Azure Portal app registration client ID
- *   MICROSOFT_CLIENT_SECRET  Azure Portal client secret
  *   NEXT_PUBLIC_APP_URL   External base URL (OAuth redirect URIs)
  */
 export const runtime = "edge";
@@ -53,7 +51,7 @@ export default async function NegotiatePage() {
   }
 
   // ── Email connection status ─────────────────────────────────────────────────
-  // Check for an active Google or Microsoft connection (Google preferred).
+  // Check for an active Google connection.
   let emailConnection: EmailConnectionStatus = {
     platform: null,
     email: null,
@@ -61,26 +59,20 @@ export default async function NegotiatePage() {
   };
 
   if (internalUserId) {
-    const { data: connections } = await supabase
+    const { data: connection } = await supabase
       .from("platform_connections")
-      .select("platform, connected_email, connected_name")
+      .select("connected_email, connected_name")
       .eq("user_id", internalUserId)
       .eq("status", "connected")
-      .in("platform", ["google", "microsoft"]);
+      .eq("platform", "google")
+      .maybeSingle();
 
-    if (connections && connections.length > 0) {
-      // Prefer Google if both are connected
-      const google = connections.find((c) => c.platform === "google");
-      const microsoft = connections.find((c) => c.platform === "microsoft");
-      const active = google ?? microsoft;
-
-      if (active?.connected_email) {
-        emailConnection = {
-          platform: active.platform as "google" | "microsoft",
-          email: active.connected_email,
-          name: active.connected_name ?? null,
-        };
-      }
+    if (connection?.connected_email) {
+      emailConnection = {
+        platform: "google",
+        email: connection.connected_email,
+        name: connection.connected_name ?? null,
+      };
     }
   }
 
