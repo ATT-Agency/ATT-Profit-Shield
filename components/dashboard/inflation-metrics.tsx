@@ -156,13 +156,6 @@ export function InflationMetrics({
               {currentLabel} window compared against {baselineLabel} baseline. Move
               the inflation dial to isolate macro price pressure from real
               purchasing-volume change.
-              {result.summary.synthesizedCategoryCount > 0 ? (
-                <span className="ml-2 text-jackson-soft">
-                  · Sandbox: synthesized baselines for{" "}
-                  {result.summary.synthesizedCategoryCount} categor
-                  {result.summary.synthesizedCategoryCount === 1 ? "y" : "ies"}.
-                </span>
-              ) : null}
             </CardDescription>
           </div>
           <RateControl rate={rate} onChange={commitRate} hydrated={hydrated} />
@@ -345,12 +338,12 @@ function MetricRow({ metric }: { metric: InflationCategoryMetric }) {
       <td className="py-3 pl-4 pr-4 font-medium text-cream">
         <div className="flex items-center gap-2">
           <span>{metric.category}</span>
-          {metric.synthesizedBaseline ? (
+          {metric.status === "new" ? (
             <span
               className="rounded-full bg-jackson/20 px-2 py-0.5 text-[9px] uppercase tracking-[0.14em] text-jackson-soft"
-              title="Sandbox baseline synthesized at 88% of current spend"
+              title="No historical baseline for this category in the comparison window"
             >
-              Synth
+              New
             </span>
           ) : null}
         </div>
@@ -461,7 +454,7 @@ function Legend() {
     { swatch: "bg-vibrant", label: "Macro inflation share" },
     { swatch: "bg-hotpink", label: "Operational volume — spike" },
     { swatch: "bg-electric", label: "Operational volume — optimized" },
-    { swatch: "bg-jackson-soft", label: "Synthesized sandbox baseline" },
+    { swatch: "bg-jackson-soft", label: "New spend (no prior-year baseline)" },
   ];
   return (
     <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-[11px] text-cream-mute">

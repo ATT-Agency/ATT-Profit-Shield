@@ -3,20 +3,14 @@
 /**
  * Screen 05 — Invoice Surcharge Integration Hub
  *
- * Connects billing platforms (Stripe / Square / QuickBooks) to FRED PPI data
+ * Connects billing platforms (Stripe / Square) to FRED PPI data
  * and applies variable surcharge line items based on tracked material cost drift.
  *
  * Real integrations require the following env vars (never hard-code secrets):
  *   STRIPE_SECRET_KEY        — Stripe restricted key with write:invoices scope
  *   STRIPE_PUBLISHABLE_KEY   — Stripe publishable key for front-end SDK
- *   SQUARE_ACCESS_TOKEN      — Square OAuth access token (sandbox or prod)
- *   QUICKBOOKS_CLIENT_ID     — QuickBooks OAuth 2.0 client ID
- *   QUICKBOOKS_CLIENT_SECRET — QuickBooks OAuth 2.0 client secret
- *   QUICKBOOKS_REDIRECT_URI  — OAuth callback URL
+ *   SQUARE_ACCESS_TOKEN      — Square OAuth access token
  *   FRED_API_KEY             — St. Louis Fed API key (free, stlouisfed.org/docs/api/fred)
- *
- * In this implementation all platform connections are mock/local-state only.
- * Replace the `handleConnect` stubs with real OAuth flows when keys are available.
  */
 
 import { useState, useEffect } from "react";
@@ -30,7 +24,6 @@ import {
   Zap,
   Receipt,
   TrendingUp,
-  ArrowRight,
   Info,
   ExternalLink,
 } from "lucide-react";
@@ -38,12 +31,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScreenHeader } from "@/components/screen-header";
 import { COPY } from "@/lib/copy";
-import { COMMODITY_CATALOG } from "@/lib/fred";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type PlatformId = "stripe" | "square" | "quickbooks";
+type PlatformId = "stripe" | "square";
 
 interface Integration {
   id: PlatformId;
@@ -58,7 +50,17 @@ interface Integration {
 interface ConnectionState {
   stripe: "disconnected" | "connected" | "error";
   square: "disconnected" | "connected" | "error";
-  quickbooks: "disconnected" | "connected" | "error";
+}
+
+export interface InitialMaterial {
+  id: string;
+  materialName: string;
+  fredCode: string;
+  fredLabel: string;
+  driftPct: number;
+  baselineCost: number;
+  quantity: number;
+  unit: string;
 }
 
 interface MaterialLineItem {
@@ -66,7 +68,7 @@ interface MaterialLineItem {
   materialName: string;
   fredCode: string;
   fredLabel: string;
-  driftPct: number;    // YoY PPI change
+  driftPct: number;    // YoY PPI change (annualized)
   baselineCost: number;
   quantity: number;
   unit: string;
@@ -96,86 +98,10 @@ const INTEGRATIONS: Integration[] = [
     logoChar: "Sq",
     accentClass: "bg-jackson/20 text-jackson-soft border-jackson/30",
   },
-  {
-    id: "quickbooks",
-    label: "QuickBooks",
-    description: "Pushes SalesItemLineDetail items to QuickBooks Online invoices via OAuth 2.0.",
-    docsUrl: "https://developer.intuit.com/app/developer/qbo/docs/api/accounting/all-entities/invoice",
-    requiredEnv: ["QUICKBOOKS_CLIENT_ID", "QUICKBOOKS_CLIENT_SECRET", "QUICKBOOKS_REDIRECT_URI"],
-    logoChar: "QB",
-    accentClass: "bg-vibrant/20 text-vibrant-soft border-vibrant/30",
-  },
 ];
 
-// Demo material line items — in production these come from the Supabase materials table
-// enriched with live FRED YoY deltas (same as the Materials screen).
-const DEMO_LINE_ITEMS: MaterialLineItem[] = [
-  {
-    id: "m1",
-    materialName: "Stainless Steel Rod",
-    fredCode: "WPU101",
-    fredLabel: "Steel & Iron",
-    driftPct: 6.4,
-    baselineCost: 480,
-    quantity: 12,
-    unit: "unit",
-    surchargeEnabled: true,
-    billingLabel: "Material Surcharge — Steel (FRED PPI +6.4%)",
-    mappedPlatform: "stripe",
-  },
-  {
-    id: "m2",
-    materialName: "Structural Lumber",
-    fredCode: "WPU081",
-    fredLabel: "Lumber & Wood",
-    driftPct: 9.1,
-    baselineCost: 210,
-    quantity: 40,
-    unit: "bd ft",
-    surchargeEnabled: true,
-    billingLabel: "Material Surcharge — Lumber (FRED PPI +9.1%)",
-    mappedPlatform: "stripe",
-  },
-  {
-    id: "m3",
-    materialName: "Diesel Fuel",
-    fredCode: "WPU057",
-    fredLabel: "Fuel & Petroleum",
-    driftPct: 11.2,
-    baselineCost: 4.85,
-    quantity: 300,
-    unit: "gal",
-    surchargeEnabled: true,
-    billingLabel: "Fuel & Energy Surcharge (FRED PPI +11.2%)",
-    mappedPlatform: "square",
-  },
-  {
-    id: "m4",
-    materialName: "Industrial Electricity",
-    fredCode: "PCU221122221122",
-    fredLabel: "Industrial Electricity",
-    driftPct: 4.2,
-    baselineCost: 0.128,
-    quantity: 8400,
-    unit: "kWh",
-    surchargeEnabled: false,
-    billingLabel: "Utility Surcharge — Electricity (FRED PPI +4.2%)",
-    mappedPlatform: null,
-  },
-  {
-    id: "m5",
-    materialName: "Aluminum Sheet",
-    fredCode: "WPU102501",
-    fredLabel: "Aluminum Mill Shapes",
-    driftPct: 7.8,
-    baselineCost: 3.4,
-    quantity: 650,
-    unit: "lb",
-    surchargeEnabled: true,
-    billingLabel: "Material Surcharge — Aluminum (FRED PPI +7.8%)",
-    mappedPlatform: "quickbooks",
-  },
-];
+// 90-day prorate factor applied to annualized FRED drift.
+const NINETY_DAY_FACTOR = 90 / 365;
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
@@ -299,8 +225,8 @@ function IntegrationCard({
             ))}
           </div>
           <p className="text-[10px] text-cream-mute mt-3 leading-relaxed">
-            Set these in your <code className="text-vibrant-soft">.env.local</code> (dev) or
-            Cloudflare Pages / Vercel environment settings (production).
+            Set these in <code className="text-vibrant-soft">.dev.vars</code> (local Wrangler) or
+            Cloudflare Pages → Settings → Environment Variables (production, encrypted).
             Never commit secrets to source control.
           </p>
         </div>
@@ -322,7 +248,9 @@ function LineItemRow({
   onPlatformChange: (id: string, platform: PlatformId | null) => void;
   connections: ConnectionState;
 }) {
-  const surchargeAmt = item.baselineCost * item.quantity * (item.driftPct / 100);
+  // 90-day prorated exposure: annualized drift * (90/365) applied to baseline spend.
+  const surchargeAmt =
+    item.baselineCost * item.quantity * (item.driftPct / 100) * NINETY_DAY_FACTOR;
   const up = item.driftPct > 0;
 
   return (
@@ -360,7 +288,7 @@ function LineItemRow({
         </span>
       </td>
 
-      {/* Surcharge $ */}
+      {/* Surcharge $ (90-day prorated) */}
       <td className="px-4 py-3 text-right font-mono text-sm">
         <span className={item.surchargeEnabled ? "text-cream" : "text-cream-mute"}>
           {formatCurrency(surchargeAmt)}
@@ -418,17 +346,19 @@ function InvoicePreview({ items }: { items: MaterialLineItem[] }) {
   const [copied, setCopied] = useState(false);
   const active = items.filter((i) => i.surchargeEnabled);
   const totalSurcharge = active.reduce(
-    (s, i) => s + i.baselineCost * i.quantity * (i.driftPct / 100),
+    (s, i) =>
+      s + i.baselineCost * i.quantity * (i.driftPct / 100) * NINETY_DAY_FACTOR,
     0
   );
   const baseTotal = items.reduce((s, i) => s + i.baselineCost * i.quantity, 0);
   const pct = baseTotal > 0 ? (totalSurcharge / baseTotal) * 100 : 0;
 
   const previewText = [
-    "INVOICE LINE ITEMS — Surcharge Adjustments",
+    "INVOICE LINE ITEMS — Surcharge Adjustments (90-day exposure)",
     "─".repeat(48),
     ...active.map((i) => {
-      const amt = i.baselineCost * i.quantity * (i.driftPct / 100);
+      const amt =
+        i.baselineCost * i.quantity * (i.driftPct / 100) * NINETY_DAY_FACTOR;
       return `${i.billingLabel.padEnd(40)} ${formatCurrency(amt).padStart(10)}`;
     }),
     "─".repeat(48),
@@ -452,7 +382,7 @@ function InvoicePreview({ items }: { items: MaterialLineItem[] }) {
           <p className="text-[11px] uppercase tracking-[0.22em] text-vibrant">Invoice Preview</p>
           <h3 className="font-display text-2xl mt-1">Surcharge line items</h3>
           <p className="text-sm text-cream-mute mt-1">
-            These line items will be pushed to your connected billing platform when you apply.
+            90-day prorated exposure pushed to your connected billing platform when you apply.
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={copyPreview}>
@@ -484,7 +414,11 @@ function InvoicePreview({ items }: { items: MaterialLineItem[] }) {
             </thead>
             <tbody>
               {active.map((item) => {
-                const amt = item.baselineCost * item.quantity * (item.driftPct / 100);
+                const amt =
+                  item.baselineCost *
+                  item.quantity *
+                  (item.driftPct / 100) *
+                  NINETY_DAY_FACTOR;
                 return (
                   <tr key={item.id} className="border-b border-cocoa-800/60">
                     <td className="px-5 py-3 text-cream">{item.billingLabel}</td>
@@ -519,11 +453,12 @@ function InvoicePreview({ items }: { items: MaterialLineItem[] }) {
         <div className="mt-5 flex items-start gap-2 rounded-2xl border border-cocoa-700 bg-cocoa-900 px-4 py-3">
           <Info className="size-4 text-cream-mute mt-0.5 shrink-0" />
           <p className="text-xs text-cream-mute leading-relaxed">
-            Surcharges are calculated as{" "}
-            <code className="text-vibrant-soft">baseline_cost × quantity × fred_ppi_yoy_delta</code>.
-            Connect a billing platform above and ensure the FRED API key is configured to push
-            these items automatically. See{" "}
-            <code className="text-vibrant-soft">FRED_API_KEY</code> in your environment.
+            90-day exposure ={" "}
+            <code className="text-vibrant-soft">
+              baseline_cost × quantity × fred_ppi_yoy_delta × (90/365)
+            </code>
+            . Connect a billing platform above and ensure the FRED API key is configured to push
+            these items automatically.
           </p>
         </div>
       )}
@@ -533,13 +468,36 @@ function InvoicePreview({ items }: { items: MaterialLineItem[] }) {
 
 // ── Main Screen ────────────────────────────────────────────────────────────────
 
-export function SurchargeHubScreen() {
+export function SurchargeHubScreen({
+  initialMaterials,
+}: {
+  initialMaterials: InitialMaterial[];
+}) {
   const [connections, setConnections] = useState<ConnectionState>({
     stripe: "disconnected",
     square: "disconnected",
-    quickbooks: "disconnected",
   });
-  const [items, setItems] = useState<MaterialLineItem[]>(DEMO_LINE_ITEMS);
+  const [items, setItems] = useState<MaterialLineItem[]>([]);
+
+  // Hydrate items from server-supplied live materials.
+  useEffect(() => {
+    const rows: MaterialLineItem[] = initialMaterials.map((m) => ({
+      id: m.id,
+      materialName: m.materialName,
+      fredCode: m.fredCode,
+      fredLabel: m.fredLabel,
+      driftPct: m.driftPct,
+      baselineCost: m.baselineCost,
+      quantity: m.quantity,
+      unit: m.unit,
+      surchargeEnabled: m.driftPct > 0,
+      billingLabel: `Material Surcharge — ${m.materialName} (FRED PPI ${formatPercent(
+        m.driftPct
+      )})`,
+      mappedPlatform: null,
+    }));
+    setItems(rows);
+  }, [initialMaterials]);
 
   // Persist connection state in localStorage
   useEffect(() => {
@@ -557,14 +515,11 @@ export function SurchargeHubScreen() {
   }
 
   function handleConnect(id: PlatformId) {
-    // In production: launch OAuth flow or validate API key.
-    // Here we simulate a "connected" state as a placeholder.
     saveConnections({ ...connections, [id]: "connected" });
   }
 
   function handleDisconnect(id: PlatformId) {
     saveConnections({ ...connections, [id]: "disconnected" });
-    // Also clear any mapped items pointing to this platform
     setItems((prev) =>
       prev.map((i) =>
         i.mappedPlatform === id ? { ...i, mappedPlatform: null } : i
@@ -593,7 +548,11 @@ export function SurchargeHubScreen() {
   const totalActive = items.filter((i) => i.surchargeEnabled).length;
   const totalSurcharge = items
     .filter((i) => i.surchargeEnabled)
-    .reduce((s, i) => s + i.baselineCost * i.quantity * (i.driftPct / 100), 0);
+    .reduce(
+      (s, i) =>
+        s + i.baselineCost * i.quantity * (i.driftPct / 100) * NINETY_DAY_FACTOR,
+      0
+    );
   const connectedCount = Object.values(connections).filter((v) => v === "connected").length;
 
   return (
@@ -608,8 +567,8 @@ export function SurchargeHubScreen() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         <div className="rounded-3xl border border-cocoa-700 bg-cocoa-900/70 p-6 shadow-card">
           <p className="text-[11px] uppercase tracking-[0.22em] text-cream-mute">Platforms connected</p>
-          <p className="font-display text-4xl mt-3">{connectedCount} / 3</p>
-          <p className="text-xs text-cream-mute mt-2">Stripe, Square, QuickBooks</p>
+          <p className="font-display text-4xl mt-3">{connectedCount} / 2</p>
+          <p className="text-xs text-cream-mute mt-2">Stripe, Square</p>
         </div>
         <div className="rounded-3xl border border-vibrant/40 bg-cocoa-900/70 p-6 shadow-card">
           <div className="absolute -top-12 -right-12 size-36 rounded-full bg-vibrant/10 blur-2xl pointer-events-none" />
@@ -618,7 +577,7 @@ export function SurchargeHubScreen() {
           <p className="text-xs text-cream-mute mt-2">of {items.length} tracked materials</p>
         </div>
         <div className="rounded-3xl border border-hotpink/30 bg-cocoa-900/70 p-6 shadow-card relative overflow-hidden">
-          <p className="text-[11px] uppercase tracking-[0.22em] text-cream-mute">Total billable surcharge</p>
+          <p className="text-[11px] uppercase tracking-[0.22em] text-cream-mute">90-day billable exposure</p>
           <p className="font-display text-4xl mt-3 text-hotpink-soft">{formatCurrency(totalSurcharge)}</p>
           <p className="text-xs text-cream-mute mt-2">across enabled line items</p>
         </div>
@@ -627,7 +586,7 @@ export function SurchargeHubScreen() {
       {/* Integration cards */}
       <section>
         <h2 className="font-display text-2xl mb-4">Platform connections</h2>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
           {INTEGRATIONS.map((intg) => (
             <IntegrationCard
               key={intg.id}
@@ -656,51 +615,55 @@ export function SurchargeHubScreen() {
           </div>
         </div>
 
-        <div className="rounded-3xl border border-cocoa-700 bg-cocoa-900/70 shadow-card overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-cocoa-800">
-                <th className="px-4 py-3 w-10"></th>
-                <th className="px-4 py-3 text-left text-[10px] uppercase tracking-[0.2em] text-cream-mute font-medium">
-                  Material
-                </th>
-                <th className="px-4 py-3 text-right text-[10px] uppercase tracking-[0.2em] text-cream-mute font-medium">
-                  FRED PPI Δ
-                </th>
-                <th className="px-4 py-3 text-right text-[10px] uppercase tracking-[0.2em] text-cream-mute font-medium">
-                  Surcharge $
-                </th>
-                <th className="px-4 py-3 text-left text-[10px] uppercase tracking-[0.2em] text-cream-mute font-medium">
-                  Invoice label
-                </th>
-                <th className="px-4 py-3 text-left text-[10px] uppercase tracking-[0.2em] text-cream-mute font-medium">
-                  Platform
-                </th>
-                <th className="px-4 py-3 text-left text-[10px] uppercase tracking-[0.2em] text-cream-mute font-medium">
-                  Status
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((item) => (
-                <LineItemRow
-                  key={item.id}
-                  item={item}
-                  onToggle={toggleSurcharge}
-                  onLabelChange={updateLabel}
-                  onPlatformChange={updatePlatform}
-                  connections={connections}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <p className="text-xs text-cream-mute mt-3 flex items-center gap-1.5">
-          <Info className="size-3.5" />
-          Demo data shown above. Live values pull from your tracked materials on Screen 02 enriched
-          with FRED API data. Requires <code className="text-vibrant-soft">FRED_API_KEY</code> env var.
-        </p>
+        {items.length === 0 ? (
+          <div className="rounded-3xl border border-dashed border-cocoa-700 p-12 text-center">
+            <Receipt className="size-8 text-cream-mute mx-auto mb-3 opacity-50" />
+            <p className="text-cream-dim font-medium">No tracked materials yet.</p>
+            <p className="text-sm text-cream-mute mt-1">
+              Add inputs on the Cost Inputs screen to populate surcharge line items.
+            </p>
+          </div>
+        ) : (
+          <div className="rounded-3xl border border-cocoa-700 bg-cocoa-900/70 shadow-card overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-cocoa-800">
+                  <th className="px-4 py-3 w-10"></th>
+                  <th className="px-4 py-3 text-left text-[10px] uppercase tracking-[0.2em] text-cream-mute font-medium">
+                    Material
+                  </th>
+                  <th className="px-4 py-3 text-right text-[10px] uppercase tracking-[0.2em] text-cream-mute font-medium">
+                    FRED PPI Δ
+                  </th>
+                  <th className="px-4 py-3 text-right text-[10px] uppercase tracking-[0.2em] text-cream-mute font-medium">
+                    90-day $
+                  </th>
+                  <th className="px-4 py-3 text-left text-[10px] uppercase tracking-[0.2em] text-cream-mute font-medium">
+                    Invoice label
+                  </th>
+                  <th className="px-4 py-3 text-left text-[10px] uppercase tracking-[0.2em] text-cream-mute font-medium">
+                    Platform
+                  </th>
+                  <th className="px-4 py-3 text-left text-[10px] uppercase tracking-[0.2em] text-cream-mute font-medium">
+                    Status
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <LineItemRow
+                    key={item.id}
+                    item={item}
+                    onToggle={toggleSurcharge}
+                    onLabelChange={updateLabel}
+                    onPlatformChange={updatePlatform}
+                    connections={connections}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       {/* Invoice preview */}

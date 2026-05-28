@@ -14,7 +14,7 @@ export const COPY = {
     eyebrow: "Screen 01 — Spending",
     headline: "Where your operating cash is going.",
     sub: "Connect your bank through Plaid. We sort every transaction into clear buckets so you can see exactly where margin is leaking.",
-    plaidCta: "Connect Sandbox Bank",
+    plaidCta: "Connect Institution Account",
     emptyTitle: "No bank connected yet",
     emptyBody: "Link a business account to import transactions and populate spending buckets."
   },

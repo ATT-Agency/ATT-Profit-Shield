@@ -22,7 +22,6 @@ export type InflationCategoryMetric = {
   operationalShare: number;
   status: "spike" | "optimized" | "neutral" | "new";
   hasHistoricalBaseline: boolean;
-  synthesizedBaseline: boolean;
 };
 
 export type InflationSummary = {
@@ -34,7 +33,6 @@ export type InflationSummary = {
   inflationRate: number;
   currentWindow: { year: number; month: number };
   historicalWindow: { year: number; month: number };
-  synthesizedCategoryCount: number;
 };
 
 export type InflationEngineResult = {
@@ -53,8 +51,6 @@ export const ALL_INFLATION_CATEGORIES: readonly ExpenseCategory[] = [
   ...NAMED_BUCKETS,
   FALLBACK_BUCKET,
 ] as const;
-
-const SYNTHESIS_RATIO = 0.88;
 
 function safeFloat(n: unknown): number {
   if (typeof n === "number") return Number.isFinite(n) ? n : 0;
@@ -121,30 +117,13 @@ export function runInflationEngine(
     }
   }
 
-  let synthesizedCategoryCount = 0;
-
   const metrics: InflationCategoryMetric[] = ALL_INFLATION_CATEGORIES.map(
     (category) => {
       const oldRaw = oldByBucket.get(category) ?? 0;
       const newRaw = newByBucket.get(category) ?? 0;
-      const rawOldTotal = oldRaw > 0 ? oldRaw : 0;
+      const oldTotal = oldRaw > 0 ? oldRaw : 0;
       const newTotal = newRaw > 0 ? newRaw : 0;
 
-      // SANDBOX / NEW-SPEND VISUAL BASELINE:
-      // When the historical window has $0 for a category but the current
-      // window has spend, synthesize a display-only baseline so the mix bar
-      // renders a split instead of a flat 100% operational rail. The
-      // synthesized value is used ONLY for inflationShare / operationalShare
-      // (visual mix bar). All real math — inflationImpact, adjustedBaseline,
-      // volumeDrift, driftPercent — uses rawOldTotal (zero), so the summary
-      // totals are not polluted and status correctly reads "new".
-      let synthesizedBaseline = false;
-      if (rawOldTotal === 0 && newTotal > 0) {
-        synthesizedBaseline = true;
-        synthesizedCategoryCount += 1;
-      }
-
-      const oldTotal = rawOldTotal;
       const inflationImpact = oldTotal * (safeRate / 100);
       const adjustedBaseline = oldTotal + inflationImpact;
       const volumeDrift = newTotal - adjustedBaseline;
@@ -156,17 +135,14 @@ export function runInflationEngine(
             ? 100
             : 0;
 
-      // For the visual mix bar, use the synthesis ratio to avoid a flat
-      // 100% operational bar for genuinely new spend categories.
-      const visualOldTotal = synthesizedBaseline
-        ? newTotal * SYNTHESIS_RATIO
-        : oldTotal;
-      const visualInflationImpact = visualOldTotal * (safeRate / 100);
-
+      // Mix-bar: real inflation share is bounded by historical baseline only.
+      // No synthetic baseline is fabricated when history is missing — the row
+      // is simply flagged "new" via classifyStatus and rendered as 100%
+      // operational, since there is no macro inflation to attribute.
       let inflationShare = 0;
       let operationalShare = 0;
       if (newTotal > 0) {
-        const capInflation = Math.min(Math.max(visualInflationImpact, 0), newTotal);
+        const capInflation = Math.min(Math.max(inflationImpact, 0), newTotal);
         inflationShare = (capInflation / newTotal) * 100;
         operationalShare = Math.max(0, 100 - inflationShare);
       }
@@ -182,13 +158,12 @@ export function runInflationEngine(
         inflationShare: safeFloat(inflationShare),
         operationalShare: safeFloat(operationalShare),
         status: classifyStatus({
-          oldTotal: rawOldTotal,
+          oldTotal,
           newTotal,
           adjustedBaseline,
           volumeDrift,
         }),
         hasHistoricalBaseline: oldTotal > 0,
-        synthesizedBaseline,
       };
     }
   );
@@ -210,7 +185,6 @@ export function runInflationEngine(
       inflationRate: safeRate,
       currentWindow: { year: targetYear, month: targetMonth },
       historicalWindow: { year: historicalYear, month: targetMonth },
-      synthesizedCategoryCount,
     },
   };
 }

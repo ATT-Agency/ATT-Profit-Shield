@@ -1,4 +1,5 @@
 import { SurchargeHubScreen } from "@/components/screens/surcharge-hub";
+import { loadEnrichedMaterials } from "@/lib/materials";
 
 /**
  * Screen 05 — Invoice Surcharge Integration Hub
@@ -7,12 +8,23 @@ import { SurchargeHubScreen } from "@/components/screens/surcharge-hub";
  * Required env vars for live integrations:
  *   STRIPE_SECRET_KEY         Stripe restricted key (write:invoices)
  *   STRIPE_PUBLISHABLE_KEY    Stripe publishable key
- *   SQUARE_ACCESS_TOKEN       Square OAuth token (sandbox or prod)
- *   QUICKBOOKS_CLIENT_ID      QuickBooks OAuth 2.0 client ID
- *   QUICKBOOKS_CLIENT_SECRET  QuickBooks OAuth 2.0 client secret
- *   QUICKBOOKS_REDIRECT_URI   OAuth callback URL
+ *   SQUARE_ACCESS_TOKEN       Square OAuth token
  *   FRED_API_KEY              St. Louis Fed API key
  */
-export default function SurchargePage() {
-  return <SurchargeHubScreen />;
+export const runtime = "edge";
+export const dynamic = "force-dynamic";
+
+export default async function SurchargePage() {
+  const rows = await loadEnrichedMaterials();
+  const initialMaterials = rows.map((r) => ({
+    id: r.id,
+    materialName: r.name,
+    fredCode: r.fred_ppi_code ?? "",
+    fredLabel: r.fred_ppi_code ?? "Custom",
+    driftPct: r.annualDriftPct ?? 0,
+    baselineCost: r.baseline_cost,
+    quantity: r.quantity,
+    unit: r.unit,
+  }));
+  return <SurchargeHubScreen initialMaterials={initialMaterials} />;
 }

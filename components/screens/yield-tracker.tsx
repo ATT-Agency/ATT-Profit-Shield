@@ -13,16 +13,14 @@
  * createMaterial in app/materials/actions.ts and call it from handleAdd.
  */
 
-import { useState, useEffect, useRef, useId } from "react";
+import { useState, useEffect, useId } from "react";
 import {
   Plus,
   Trash2,
   TrendingUp,
   TrendingDown,
-  Minus,
   Info,
   Download,
-  RefreshCw,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -58,59 +56,6 @@ type YieldTone = "good" | "warn" | "danger";
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const STORAGE_KEY = "ps:yield:entries";
-
-const DEMO_ENTRIES: YieldEntry[] = [
-  {
-    id: "y1",
-    material: "Stainless Steel Rod (304)",
-    unit: "unit",
-    invoiceDate: "2025-05-12",
-    vendorName: "Apex Steel Fabricators",
-    statedQty: 12,
-    actualQty: 11.5,
-    invoicedUnitCost: 480,
-  },
-  {
-    id: "y2",
-    material: "Structural Lumber (2×6)",
-    unit: "bd ft",
-    invoiceDate: "2025-05-08",
-    vendorName: "Pacific Lumber Supply",
-    statedQty: 8000,
-    actualQty: 7620,
-    invoicedUnitCost: 0.68,
-  },
-  {
-    id: "y3",
-    material: "Ultra-Low Sulfur Diesel",
-    unit: "gal",
-    invoiceDate: "2025-05-05",
-    vendorName: "Diesel Direct LLC",
-    statedQty: 300,
-    actualQty: 298,
-    invoicedUnitCost: 4.05,
-  },
-  {
-    id: "y4",
-    material: "Corrugated Cardboard Boxes",
-    unit: "unit",
-    invoiceDate: "2025-04-28",
-    vendorName: "Prime Paper & Pack",
-    statedQty: 2400,
-    actualQty: 2352,
-    invoicedUnitCost: 1.42,
-  },
-  {
-    id: "y5",
-    material: "Aluminum Sheet (6061-T6)",
-    unit: "lb",
-    invoiceDate: "2025-05-20",
-    vendorName: "Atlas Aluminum Works",
-    statedQty: 650,
-    actualQty: 644,
-    invoicedUnitCost: 3.15,
-  },
-];
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -587,17 +532,17 @@ export function YieldTrackerScreen() {
   const [entries, setEntries] = useState<YieldEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
 
-  // Load from localStorage on mount
+  // Load from localStorage on mount — start empty if no local data exists.
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         setEntries(JSON.parse(saved));
       } else {
-        setEntries(DEMO_ENTRIES);
+        setEntries([]);
       }
     } catch {
-      setEntries(DEMO_ENTRIES);
+      setEntries([]);
     }
     setLoaded(true);
   }, []);
@@ -616,10 +561,6 @@ export function YieldTrackerScreen() {
 
   function handleDelete(id: string) {
     setEntries((prev) => prev.filter((e) => e.id !== id));
-  }
-
-  function resetToDemo() {
-    setEntries(DEMO_ENTRIES);
   }
 
   const rows = entries.map(computeRow);
@@ -643,18 +584,12 @@ export function YieldTrackerScreen() {
         headline={COPY.yield.headline}
         sub={COPY.yield.sub}
         trailing={
-          <div className="flex items-center gap-2">
-            {rows.length > 0 && (
-              <Button variant="outline" size="sm" onClick={() => csvExport(rows)}>
-                <Download className="size-3.5" />
-                Export CSV
-              </Button>
-            )}
-            <Button variant="ghost" size="sm" onClick={resetToDemo}>
-              <RefreshCw className="size-3.5" />
-              Load demo
+          rows.length > 0 ? (
+            <Button variant="outline" size="sm" onClick={() => csvExport(rows)}>
+              <Download className="size-3.5" />
+              Export CSV
             </Button>
-          </div>
+          ) : null
         }
       />
 

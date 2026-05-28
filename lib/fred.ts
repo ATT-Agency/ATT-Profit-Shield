@@ -48,7 +48,7 @@ export async function fetchFredSeries(
   seriesId: string,
   opts: { limit?: number; observationStart?: string } = {}
 ): Promise<FredSeriesResponse> {
-  const key = process.env.FRED_API_KEY;
+  const key = process.env.FRED_API_KEY || (typeof process !== 'undefined' ? process.env.FRED_API_KEY : undefined);
   if (!key) throw new Error("FRED_API_KEY missing");
 
   const url = new URL(`${FRED_BASE}/series/observations`);
