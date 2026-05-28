@@ -6,12 +6,20 @@
  * Connects billing platforms (Stripe / Square) to FRED PPI data and applies
  * variable surcharge line items based on tracked material cost drift.
  *
- * Real OAuth/key-validation endpoints, real Stripe Invoice Items, real Square
- * Orders + Invoices. All env vars resolved server-side:
- *   STRIPE_SECRET_KEY        — restricted key, write:invoiceitems + write:invoices
- *   NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY (client, optional — for future Elements)
- *   SQUARE_ACCESS_TOKEN      — OAuth bearer with Invoices + Orders + Customers scopes
- *   FRED_API_KEY             — drives the surcharge amount via PPI YoY
+ * Connect buttons now kick off a per-user OAuth handshake against
+ * /api/auth/{platform}/connect — tokens are AES-GCM encrypted and stored on
+ * public.platform_connections. No global API keys are used to access tenant
+ * data; the platform secret is only ever touched server-side during the
+ * one-shot OAuth code exchange.
+ *
+ * Platform env vars (server-side, set in Cloudflare Pages):
+ *   STRIPE_SECRET_KEY            — platform-level, OAuth token exchange only
+ *   STRIPE_CLIENT_ID             — Connect application id (ca_…)
+ *   SQUARE_APPLICATION_ID        — Square Developer Dashboard app id
+ *   SQUARE_APPLICATION_SECRET    — Square Developer Dashboard app secret
+ *   SQUARE_ENVIRONMENT           — "production" (default) or "sandbox"
+ *   ENCRYPTION_MASTER_KEY        — 32-byte hex for at-rest token encryption
+ *   FRED_API_KEY                 — drives the surcharge amount via PPI YoY
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -109,7 +117,7 @@ const INTEGRATIONS: Integration[] = [
     label: "Stripe",
     description: "Adds surcharge line items to Stripe invoices via the Invoice Items API.",
     docsUrl: "https://stripe.com/docs/api/invoiceitems",
-    requiredEnv: ["STRIPE_SECRET_KEY", "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY"],
+    requiredEnv: ["STRIPE_CLIENT_ID", "STRIPE_SECRET_KEY"],
     logoChar: "S",
     accentClass: "bg-electric/20 text-electric-soft border-electric/30",
   },
@@ -118,7 +126,7 @@ const INTEGRATIONS: Integration[] = [
     label: "Square",
     description: "Creates draft Invoices on Square Orders via the Invoices API.",
     docsUrl: "https://developer.squareup.com/reference/square/invoices-api",
-    requiredEnv: ["SQUARE_ACCESS_TOKEN"],
+    requiredEnv: ["SQUARE_APPLICATION_ID", "SQUARE_APPLICATION_SECRET"],
     logoChar: "Sq",
     accentClass: "bg-jackson/20 text-jackson-soft border-jackson/30",
   },
@@ -847,7 +855,42 @@ export function SurchargeHubScreen({
   // Restore non-secret connection metadata across reloads. We don't persist
   // the connected state itself — we re-validate on mount so the badge reflects
   // current key status, not a stale "true" from a previous session.
+  //
+  // If we just landed back from an OAuth round-trip, surface any error string
+  // the callback redirected with and strip the query params so a refresh
+  // doesn't replay them.
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const stripeErr = params.get("stripe_error");
+    const squareErr = params.get("square_error");
+    if (stripeErr) {
+      setPushResults((p) => [
+        { platform: "stripe" as PlatformId, ok: false, message: `Connect failed — ${stripeErr}` },
+        ...p,
+      ].slice(0, 5));
+    }
+    if (squareErr) {
+      setPushResults((p) => [
+        { platform: "square" as PlatformId, ok: false, message: `Connect failed — ${squareErr}` },
+        ...p,
+      ].slice(0, 5));
+    }
+    if (
+      params.has("stripe_error") ||
+      params.has("square_error") ||
+      params.has("stripe_connected") ||
+      params.has("square_connected")
+    ) {
+      const clean = new URL(window.location.href);
+      [
+        "stripe_error",
+        "square_error",
+        "stripe_connected",
+        "square_connected",
+      ].forEach((k) => clean.searchParams.delete(k));
+      window.history.replaceState({}, "", clean.toString());
+    }
+
     void (async () => {
       for (const platform of ["stripe", "square"] as PlatformId[]) {
         await validatePlatform(platform);
@@ -890,8 +933,12 @@ export function SurchargeHubScreen({
     }
   }
 
+  // OAuth handoff: navigate to /api/auth/{platform}/connect, which 302s the
+  // user to Stripe/Square. After approval they land back on /surcharge with
+  // ?{platform}_connected=1, the success-effect below re-runs validate, and
+  // the badge flips to "Live".
   function handleConnect(id: PlatformId) {
-    void validatePlatform(id);
+    window.location.href = `/api/auth/${id}/connect`;
   }
 
   function handleDisconnect(id: PlatformId) {

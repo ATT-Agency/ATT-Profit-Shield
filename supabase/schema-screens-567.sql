@@ -37,13 +37,24 @@ drop trigger if exists surcharge_mappings_touch on public.surcharge_mappings;
 create trigger surcharge_mappings_touch before update on public.surcharge_mappings
   for each row execute function public.touch_updated_at();
 
--- Platform connection status (key hint only, never the full key)
+-- Platform connection status. Holds the AES-GCM ciphertext of the per-user
+-- OAuth access/refresh tokens for Stripe Connect and Square. The decryption
+-- key (ENCRYPTION_MASTER_KEY) lives only in the server runtime — the database
+-- never sees plaintext credentials. `key_hint` retains the legacy display
+-- snippet used in the connection panel UI.
 create table if not exists public.platform_connections (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
   platform text not null check (platform in ('stripe', 'square', 'quickbooks')),
   status text not null default 'disconnected' check (status in ('connected', 'disconnected', 'error')),
   key_hint text,
+  encrypted_access_token text,
+  encrypted_refresh_token text,
+  encryption_iv text,
+  stripe_user_id text,
+  square_merchant_id text,
+  token_expires_at timestamptz,
+  scope text,
   connected_at timestamptz,
   last_sync_at timestamptz,
   error_message text,
@@ -52,8 +63,30 @@ create table if not exists public.platform_connections (
   unique (user_id, platform)
 );
 
+-- Backfill columns on existing installs that pre-date the OAuth refactor.
+alter table public.platform_connections
+  add column if not exists encrypted_access_token text;
+alter table public.platform_connections
+  add column if not exists encrypted_refresh_token text;
+alter table public.platform_connections
+  add column if not exists encryption_iv text;
+alter table public.platform_connections
+  add column if not exists stripe_user_id text;
+alter table public.platform_connections
+  add column if not exists square_merchant_id text;
+alter table public.platform_connections
+  add column if not exists token_expires_at timestamptz;
+alter table public.platform_connections
+  add column if not exists scope text;
+
 create index if not exists platform_connections_user_idx
   on public.platform_connections (user_id);
+create index if not exists platform_connections_stripe_user_idx
+  on public.platform_connections (stripe_user_id)
+  where stripe_user_id is not null;
+create index if not exists platform_connections_square_merchant_idx
+  on public.platform_connections (square_merchant_id)
+  where square_merchant_id is not null;
 
 alter table public.platform_connections enable row level security;
 
