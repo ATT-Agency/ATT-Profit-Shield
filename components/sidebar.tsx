@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, Boxes, LineChart, ShieldCheck, Wallet } from "lucide-react";
+import { Activity, Boxes, LineChart, ShieldCheck, Wallet, Receipt, MessageSquare, Scale } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { COPY } from "@/lib/copy";
 
@@ -10,7 +10,10 @@ const links = [
   { href: "/", label: COPY.nav.leaks, icon: Wallet, code: "01" },
   { href: "/materials", label: COPY.nav.materials, icon: Boxes, code: "02" },
   { href: "/inflation", label: COPY.nav.inflation, icon: Activity, code: "03" },
-  { href: "/forecast", label: COPY.nav.forecast, icon: LineChart, code: "04" }
+  { href: "/forecast", label: COPY.nav.forecast, icon: LineChart, code: "04" },
+  { href: "/surcharge", label: "Invoice Surcharge", icon: Receipt, code: "05" },
+  { href: "/negotiate", label: "Vendor Negotiation", icon: MessageSquare, code: "06" },
+  { href: "/yield", label: "Yield Tracker", icon: Scale, code: "07" }
 ];
 
 export function Sidebar() {
