@@ -795,6 +795,36 @@ export function SurchargeHubScreen({
   const [connections, setConnections] = useState<ConnectionMap>(INITIAL_STATE);
   const [items, setItems] = useState<MaterialLineItem[]>([]);
   const [pushResults, setPushResults] = useState<PushResult[]>([]);
+  const [fredRefreshing, setFredRefreshing] = useState(false);
+
+  async function fetchFredData() {
+    const codes = Array.from(
+      new Set(items.map((i) => i.fredCode).filter(Boolean))
+    );
+    if (codes.length === 0) return;
+    setFredRefreshing(true);
+    try {
+      const res = await fetch(`/api/surcharge/fred?codes=${codes.join(",")}`);
+      const data = await res.json() as { data?: Record<string, { deltaPct: number | null }> };
+      if (data.data) {
+        setItems((prev) =>
+          prev.map((item) => {
+            const fresh = data.data?.[item.fredCode]?.deltaPct;
+            if (fresh == null) return item;
+            return {
+              ...item,
+              driftPct: fresh,
+              billingLabel: item.billingLabel.replace(
+                /FRED PPI [+-]?[\d.]+%/,
+                `FRED PPI ${fresh >= 0 ? "+" : ""}${fresh.toFixed(1)}%`
+              ),
+            };
+          })
+        );
+      }
+    } catch {}
+    setFredRefreshing(false);
+  }
 
   // Hydrate items from server-supplied live materials.
   useEffect(() => {
@@ -925,6 +955,22 @@ export function SurchargeHubScreen({
         eyebrow={COPY.surcharge.eyebrow}
         headline={COPY.surcharge.headline}
         sub={COPY.surcharge.sub}
+        trailing={
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void fetchFredData()}
+            disabled={fredRefreshing}
+            aria-label="Recompute FRED PPI data"
+          >
+            {fredRefreshing ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="size-3.5" />
+            )}
+            Recompute now
+          </Button>
+        }
       />
 
       <PushResultsStrip results={pushResults} onDismiss={dismissResult} />

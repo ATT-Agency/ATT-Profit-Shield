@@ -14,7 +14,7 @@
  *   SENDGRID_API_KEY     — or RESEND_API_KEY for transactional email
  */
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useId, useCallback } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -27,11 +27,17 @@ import {
   Info,
   Send,
   Loader2,
+  Upload,
+  Plus,
+  X,
+  ExternalLink,
+  Pencil,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScreenHeader } from "@/components/screen-header";
 import { COPY } from "@/lib/copy";
+import { COMMODITY_CATALOG } from "@/lib/fred";
 import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -553,6 +559,286 @@ function VendorCard({
 
 // ── Main Screen ────────────────────────────────────────────────────────────────
 
+
+// ── CSV Import ────────────────────────────────────────────────────────────────
+
+function parseVendorCSV(text: string): VendorEntry[] {
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length < 2) throw new Error("CSV must have a header row and at least one data row.");
+  const headers = lines[0]
+    .split(",")
+    .map((h) => h.trim().toLowerCase().replace(/[\s\-\/]+/g, "_").replace(/[^a-z0-9_]/g, ""));
+
+  const get = (row: string[], key: string): string => {
+    const idx2 = headers.indexOf(key);
+    return idx2 >= 0 ? (row[idx2] ?? "").trim().replace(/^["']|["']$/g, "") : "";
+  };
+
+  return lines.slice(1).filter(Boolean).map((line, idx2) => {
+    const parts = line.split(",");
+    const baseline = parseFloat(get(parts, "baseline_unit_cost") || get(parts, "baseline"));
+    const quoted = parseFloat(get(parts, "quoted_unit_cost") || get(parts, "quoted"));
+    if (isNaN(baseline) || baseline <= 0) throw new Error(`Row ${idx2 + 2}: invalid baseline_unit_cost`);
+    if (isNaN(quoted) || quoted <= 0) throw new Error(`Row ${idx2 + 2}: invalid quoted_unit_cost`);
+    if (quoted <= baseline) throw new Error(`Row ${idx2 + 2}: quoted must exceed baseline`);
+    const fredCode = get(parts, "fred_code");
+    const fredEntry = COMMODITY_CATALOG.find((c) => c.code === fredCode);
+    return {
+      id: `csv-${Date.now()}-${idx2}`,
+      vendorName: get(parts, "vendor_name") || get(parts, "vendor") || `Vendor ${idx2 + 2}`,
+      material: get(parts, "material") || "Unknown",
+      unit: get(parts, "unit") || "unit",
+      contactName: get(parts, "contact_name") || "",
+      contactEmail: get(parts, "contact_email") || "",
+      baselineUnitCost: baseline,
+      quotedUnitCost: quoted,
+      quantity: parseFloat(get(parts, "quantity")) || 1,
+      fredCode,
+      fredLabel: fredEntry?.label ?? fredCode,
+      fredPpiYoyPct: parseFloat(get(parts, "fred_ppi_yoy_pct")) || 0,
+      status: "flagged" as NegotiationStatus,
+      dateQuoted: get(parts, "date_quoted") || get(parts, "date") || new Date().toISOString().slice(0, 10),
+    };
+  });
+}
+
+function CSVImportPanel({ onImport }: { onImport: (rows: VendorEntry[]) => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<VendorEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    setError(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try { setPreview(parseVendorCSV(ev.target?.result as string)); }
+      catch (err) { setError(err instanceof Error ? err.message : "Parse error"); setPreview([]); }
+    };
+    reader.readAsText(file);
+  }
+
+  async function handleImport() {
+    if (!preview.length) return;
+    setLoading(true);
+    try {
+      await onImport(preview);
+      setOpen(false); setPreview([]);
+      if (inputRef.current) inputRef.current.value = "";
+    } catch (err) { setError(err instanceof Error ? err.message : "Import failed"); }
+    finally { setLoading(false); }
+  }
+
+  if (!open) {
+    return (
+      <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+        <Upload className="size-3.5" />Import CSV
+      </Button>
+    );
+  }
+
+  return (
+    <div className="rounded-3xl border border-cocoa-700 bg-cocoa-900/70 p-6 shadow-card space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="font-medium text-cream">Bulk CSV import</h3>
+          <p className="text-xs text-cream-mute mt-0.5">
+            Required columns: <code className="text-vibrant-soft">vendor_name, material, baseline_unit_cost, quoted_unit_cost, fred_code</code>
+          </p>
+        </div>
+        <button onClick={() => setOpen(false)} className="text-cream-mute hover:text-cream p-1 rounded-lg hover:bg-cocoa-800" aria-label="Close">
+          <X className="size-4" />
+        </button>
+      </div>
+      <a
+        href="data:text/csv;charset=utf-8,vendor_name%2Cmaterial%2Cunit%2Ccontact_name%2Ccontact_email%2Cbaseline_unit_cost%2Cquoted_unit_cost%2Cquantity%2Cfred_code%2Cdate_quoted%0AApex%20Steel%2CSteel%20Rod%2Cunit%2CMarcus%20Webb%2Cmwebb%40vendor.com%2C480%2C522%2C12%2CWPU101%2C2025-05-15"
+        download="vendor-quotes-template.csv"
+        className="text-xs text-cream-mute hover:text-cream flex items-center gap-1 w-fit"
+      >
+        <ExternalLink className="size-3" /> Download template
+      </a>
+      <input
+        ref={inputRef} type="file" accept=".csv,text/csv" onChange={handleFile}
+        className="block w-full text-sm text-cream-mute file:mr-3 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:bg-cocoa-800 file:text-cream hover:file:bg-cocoa-700 cursor-pointer"
+        aria-label="Select CSV"
+      />
+      {error && <p className="rounded-xl border border-hotpink/30 bg-hotpink/10 px-3 py-2 text-xs text-hotpink-soft" role="alert">{error}</p>}
+      {preview.length > 0 && (
+        <div className="space-y-3">
+          <p className="text-xs text-cream-mute">{preview.length} row{preview.length !== 1 ? "s" : ""} parsed:</p>
+          <div className="rounded-2xl border border-cocoa-700 bg-cocoa-950 overflow-x-auto max-h-40 overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-cocoa-900">
+                <tr className="border-b border-cocoa-800">
+                  {["Vendor", "Material", "Old $", "New $", "FRED"].map((h) => (
+                    <th key={h} className="text-left px-3 py-2 text-cream-mute font-medium">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {preview.map((row, i) => (
+                  <tr key={i} className="border-b border-cocoa-800/50">
+                    <td className="px-3 py-1.5 text-cream">{row.vendorName}</td>
+                    <td className="px-3 py-1.5 text-cream-dim">{row.material}</td>
+                    <td className="px-3 py-1.5 font-mono">{formatCurrency(row.baselineUnitCost)}</td>
+                    <td className="px-3 py-1.5 font-mono text-hotpink-soft">{formatCurrency(row.quotedUnitCost)}</td>
+                    <td className="px-3 py-1.5 text-cream-mute font-mono text-[10px]">{row.fredCode}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Button size="sm" onClick={handleImport} disabled={loading}>
+            {loading ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
+            {loading ? "Saving…" : `Import ${preview.length} vendor${preview.length !== 1 ? "s" : ""}`}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Add Vendor Form ──────────────────────────────────────────────────────────
+
+function AddVendorForm({ onAdd, onClose }: { onAdd: (v: VendorEntry) => Promise<void>; onClose: () => void }) {
+  const uid = useId();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [form, setForm] = useState({
+    vendor_name: "", material: "", unit: "unit",
+    contact_name: "", contact_email: "",
+    baseline: "", quoted: "", quantity: "1",
+    fred_code: COMMODITY_CATALOG[2]?.code ?? "",
+    date_quoted: new Date().toISOString().slice(0, 10),
+  });
+
+  const setF = (k: keyof typeof form, v: string) => setForm((f) => ({ ...f, [k]: v }));
+  const selectedFred = COMMODITY_CATALOG.find((c) => c.code === form.fred_code);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    const baseline = parseFloat(form.baseline);
+    const quoted = parseFloat(form.quoted);
+    const qty = parseFloat(form.quantity);
+    if (!form.vendor_name.trim()) return setError("Vendor name is required.");
+    if (!form.material.trim()) return setError("Material is required.");
+    if (!form.fred_code) return setError("Select a FRED series.");
+    if (isNaN(baseline) || baseline <= 0) return setError("Baseline cost must be > 0.");
+    if (isNaN(quoted) || quoted <= 0) return setError("Quoted cost must be > 0.");
+    if (quoted <= baseline) return setError("Quoted cost must exceed baseline to flag an anomaly.");
+    if (isNaN(qty) || qty <= 0) return setError("Quantity must be > 0.");
+
+    setLoading(true);
+    try {
+      let fredPpi = 0;
+      try {
+        const r = await fetch(`/api/surcharge/fred?codes=${form.fred_code}`);
+        const d = await r.json() as { data?: Record<string, { deltaPct: number | null }> };
+        fredPpi = d.data?.[form.fred_code]?.deltaPct ?? 0;
+      } catch {}
+
+      await onAdd({
+        id: `manual-${Date.now()}`,
+        vendorName: form.vendor_name.trim(),
+        material: form.material.trim(),
+        unit: form.unit.trim() || "unit",
+        contactName: form.contact_name.trim(),
+        contactEmail: form.contact_email.trim(),
+        baselineUnitCost: baseline,
+        quotedUnitCost: quoted,
+        quantity: qty,
+        fredCode: form.fred_code,
+        fredLabel: selectedFred?.label ?? form.fred_code,
+        fredPpiYoyPct: fredPpi,
+        status: "flagged",
+        dateQuoted: form.date_quoted,
+      });
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add vendor");
+    } finally { setLoading(false); }
+  }
+
+  const fc = "w-full rounded-xl border border-cocoa-700 bg-cocoa-950 px-3 py-2 text-sm text-cream placeholder:text-cream-mute focus:outline-none focus:ring-1 focus:ring-vibrant focus:border-vibrant";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 pt-16 bg-cocoa-950/80 backdrop-blur-sm overflow-y-auto" role="dialog" aria-modal="true" aria-labelledby="add-vendor-title">
+      <div className="w-full max-w-2xl rounded-3xl border border-cocoa-700 bg-cocoa-900 shadow-2xl p-7 mb-8">
+        <div className="flex items-center justify-between mb-6">
+          <h2 id="add-vendor-title" className="font-display text-xl">Flag vendor price increase</h2>
+          <button onClick={onClose} className="text-cream-mute hover:text-cream p-1 rounded-lg hover:bg-cocoa-800" aria-label="Close"><X className="size-4" /></button>
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label htmlFor={`${uid}-vn`} className="text-[10px] uppercase tracking-[0.18em] text-cream-mute">Vendor name *</label>
+              <input id={`${uid}-vn`} className={fc} value={form.vendor_name} onChange={(e) => setF("vendor_name", e.target.value)} placeholder="Apex Steel Fabricators" required />
+            </div>
+            <div className="space-y-1">
+              <label htmlFor={`${uid}-mat`} className="text-[10px] uppercase tracking-[0.18em] text-cream-mute">Material *</label>
+              <input id={`${uid}-mat`} className={fc} value={form.material} onChange={(e) => setF("material", e.target.value)} placeholder="Stainless Steel Rod" required />
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="space-y-1">
+              <label htmlFor={`${uid}-unit`} className="text-[10px] uppercase tracking-[0.18em] text-cream-mute">Unit</label>
+              <input id={`${uid}-unit`} className={fc} value={form.unit} onChange={(e) => setF("unit", e.target.value)} placeholder="unit, lb, gal…" />
+            </div>
+            <div className="space-y-1">
+              <label htmlFor={`${uid}-base`} className="text-[10px] uppercase tracking-[0.18em] text-cream-mute">Old $/unit *</label>
+              <input id={`${uid}-base`} type="number" min="0.001" step="any" className={fc} value={form.baseline} onChange={(e) => setF("baseline", e.target.value)} placeholder="480" required />
+            </div>
+            <div className="space-y-1">
+              <label htmlFor={`${uid}-quot`} className="text-[10px] uppercase tracking-[0.18em] text-cream-mute">New $/unit *</label>
+              <input id={`${uid}-quot`} type="number" min="0.001" step="any" className={fc} value={form.quoted} onChange={(e) => setF("quoted", e.target.value)} placeholder="522" required />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label htmlFor={`${uid}-qty`} className="text-[10px] uppercase tracking-[0.18em] text-cream-mute">Quantity</label>
+              <input id={`${uid}-qty`} type="number" min="0.001" step="any" className={fc} value={form.quantity} onChange={(e) => setF("quantity", e.target.value)} />
+            </div>
+            <div className="space-y-1">
+              <label htmlFor={`${uid}-date`} className="text-[10px] uppercase tracking-[0.18em] text-cream-mute">Date quoted</label>
+              <input id={`${uid}-date`} type="date" className={fc} value={form.date_quoted} onChange={(e) => setF("date_quoted", e.target.value)} />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <label htmlFor={`${uid}-fred`} className="text-[10px] uppercase tracking-[0.18em] text-cream-mute">FRED benchmark *</label>
+            <select id={`${uid}-fred`} className={fc} value={form.fred_code} onChange={(e) => setF("fred_code", e.target.value)} required>
+              <option value="">— Select commodity index —</option>
+              {COMMODITY_CATALOG.map((c) => (<option key={c.code} value={c.code}>{c.label}</option>))}
+            </select>
+            {selectedFred && <p className="text-[10px] text-cream-mute mt-0.5">{selectedFred.blurb}</p>}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label htmlFor={`${uid}-cn`} className="text-[10px] uppercase tracking-[0.18em] text-cream-mute">Contact name</label>
+              <input id={`${uid}-cn`} className={fc} value={form.contact_name} onChange={(e) => setF("contact_name", e.target.value)} placeholder="Marcus Webb" />
+            </div>
+            <div className="space-y-1">
+              <label htmlFor={`${uid}-ce`} className="text-[10px] uppercase tracking-[0.18em] text-cream-mute">Contact email</label>
+              <input id={`${uid}-ce`} type="email" className={fc} value={form.contact_email} onChange={(e) => setF("contact_email", e.target.value)} placeholder="mwebb@vendor.com" />
+            </div>
+          </div>
+          {error && <p className="rounded-xl border border-hotpink/30 bg-hotpink/10 px-3 py-2 text-xs text-hotpink-soft" role="alert">{error}</p>}
+          <div className="flex gap-3 pt-1">
+            <Button type="submit" size="sm" disabled={loading} className="flex-1">
+              {loading ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
+              {loading ? "Saving…" : "Flag vendor"}
+            </Button>
+            <Button type="button" variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export function NegotiationToolScreen({
   initialMaterials,
 }: {
@@ -601,8 +887,98 @@ export function NegotiationToolScreen({
     setVendors(rows);
   }, [initialMaterials]);
 
+  const [showAddForm, setShowAddForm] = useState(false);
+
+  // Load persisted anomalies from Supabase on top of material rows
+  useEffect(() => {
+    fetch("/api/negotiate")
+      .then((r) => r.json())
+      .then((data: { anomalies?: Array<{
+        id: string; vendor_name: string; material: string; unit: string;
+        contact_name: string | null; contact_email: string | null;
+        baseline_unit_cost: number; quoted_unit_cost: number; quantity: number;
+        fred_code: string; fred_label: string; fred_ppi_yoy_pct: number;
+        status: NegotiationStatus; date_quoted: string;
+      }> }) => {
+        if (data.anomalies && data.anomalies.length > 0) {
+          const persisted: VendorEntry[] = data.anomalies.map((a) => ({
+            id: a.id,
+            vendorName: a.vendor_name,
+            material: a.material,
+            unit: a.unit,
+            contactName: a.contact_name ?? "",
+            contactEmail: a.contact_email ?? "",
+            baselineUnitCost: Number(a.baseline_unit_cost),
+            quotedUnitCost: Number(a.quoted_unit_cost),
+            quantity: Number(a.quantity),
+            fredCode: a.fred_code,
+            fredLabel: a.fred_label,
+            fredPpiYoyPct: Number(a.fred_ppi_yoy_pct),
+            status: a.status,
+            dateQuoted: a.date_quoted,
+          }));
+          // Merge: persisted anomalies first, then material rows not already persisted
+          setVendors((prev) => {
+            const persistedIds = new Set(persisted.map((p) => p.id));
+            const materialRows = prev.filter((v) => !persistedIds.has(v.id));
+            return [...persisted, ...materialRows];
+          });
+        }
+      })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleAddVendor(v: VendorEntry) {
+    setVendors((prev) => [v, ...prev]);
+    try {
+      const res = await fetch("/api/negotiate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vendor_name: v.vendorName, material: v.material, unit: v.unit,
+          contact_name: v.contactName, contact_email: v.contactEmail,
+          baseline_unit_cost: v.baselineUnitCost, quoted_unit_cost: v.quotedUnitCost,
+          quantity: v.quantity, fred_code: v.fredCode, fred_label: v.fredLabel,
+          fred_ppi_yoy_pct: v.fredPpiYoyPct, date_quoted: v.dateQuoted,
+        }),
+      });
+      const data = await res.json() as { anomalies?: Array<{ id: string }> };
+      if (res.ok && data.anomalies?.[0]?.id) {
+        const savedId = data.anomalies[0].id;
+        setVendors((prev) => prev.map((vv) => vv.id === v.id ? { ...vv, id: savedId } : vv));
+      }
+    } catch {}
+  }
+
+  async function handleImportVendors(rows: VendorEntry[]) {
+    setVendors((prev) => [...rows, ...prev]);
+    try {
+      const payload = rows.map((v) => ({
+        vendor_name: v.vendorName, material: v.material, unit: v.unit,
+        contact_name: v.contactName, contact_email: v.contactEmail,
+        baseline_unit_cost: v.baselineUnitCost, quoted_unit_cost: v.quotedUnitCost,
+        quantity: v.quantity, fred_code: v.fredCode, fred_label: v.fredLabel,
+        fred_ppi_yoy_pct: v.fredPpiYoyPct, date_quoted: v.dateQuoted,
+      }));
+      await fetch("/api/negotiate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch {}
+  }
+
   function updateStatus(id: string, status: NegotiationStatus) {
     setVendors((prev) => prev.map((v) => (v.id === id ? { ...v, status } : v)));
+    // Persist status change if this is a DB-backed entry (UUID format, not material ID)
+    if (/^[0-9a-f]{8}-/.test(id)) {
+      fetch("/api/negotiate", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, status }),
+      }).catch(() => {});
+    }
   }
   function updateQuotedCost(id: string, value: number) {
     setVendors((prev) => prev.map((v) => (v.id === id ? { ...v, quotedUnitCost: value } : v)));
@@ -650,6 +1026,15 @@ export function NegotiationToolScreen({
         eyebrow={COPY.negotiate.eyebrow}
         headline={COPY.negotiate.headline}
         sub={COPY.negotiate.sub}
+        trailing={
+          <div className="flex items-center gap-2">
+            <CSVImportPanel onImport={handleImportVendors} />
+            <Button variant="electric" size="sm" onClick={() => setShowAddForm(true)}>
+              <Plus className="size-3.5" />
+              Flag vendor
+            </Button>
+          </div>
+        }
       />
 
       {/* Sender configuration */}
@@ -787,8 +1172,17 @@ export function NegotiationToolScreen({
           <code className="text-vibrant-soft">FRED_API_KEY</code>. Email drafts can be sent
           automatically by configuring <code className="text-vibrant-soft">SENDGRID_API_KEY</code>{" "}
           or <code className="text-vibrant-soft">RESEND_API_KEY</code>.
+          Use &quot;Import CSV&quot; or &quot;Flag vendor&quot; to add standalone price hikes
+          that persist across sessions via Supabase.
         </p>
       </div>
+
+      {showAddForm && (
+        <AddVendorForm
+          onAdd={handleAddVendor}
+          onClose={() => setShowAddForm(false)}
+        />
+      )}
     </div>
   );
 }
