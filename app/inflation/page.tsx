@@ -19,6 +19,7 @@ import {
   type FredFailureReason,
 } from "@/lib/fred";
 
+export const runtime = "edge";
 export const revalidate = 21600;
 
 function fredCopyFor(reason: FredFailureReason): string {
