@@ -1,5 +1,5 @@
 import { TrendingDown, TrendingUp } from "lucide-react";
-import { COMMODITY_CATALOG, fetchFredSeries, yoyDelta } from "@/lib/fred";
+import { COMMODITY_CATALOG, fetchSeriesWithFallback, yoyDelta } from "@/lib/fred";
 import { formatPercent } from "@/lib/utils";
 
 type TickerItem = { label: string; yoy: number };
@@ -8,7 +8,7 @@ async function loadItems(): Promise<TickerItem[]> {
   const results = await Promise.all(
     COMMODITY_CATALOG.map(async (c) => {
       try {
-        const series = await fetchFredSeries(c.code, { limit: 18 });
+        const series = await fetchSeriesWithFallback(c.code, { limit: 18 });
         const d = yoyDelta(series.observations)?.deltaPct ?? null;
         return d === null ? null : { label: c.label, yoy: d };
       } catch {

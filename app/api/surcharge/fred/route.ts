@@ -7,7 +7,7 @@
  * Required env var: FRED_API_KEY (St. Louis Fed API key)
  */
 import { NextRequest, NextResponse } from "next/server";
-import { fetchFredSeries, yoyDelta } from "@/lib/fred";
+import { fetchSeriesWithFallback, yoyDelta } from "@/lib/fred";
 
 export const runtime = "edge";
 export const revalidate = 21600; // 6 hours
@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
 
   const results = await Promise.allSettled(
     codes.map(async (code) => {
-      const series = await fetchFredSeries(code, { limit: 18 });
+      const series = await fetchSeriesWithFallback(code, { limit: 18 });
       const delta = yoyDelta(series.observations);
       return {
         code,

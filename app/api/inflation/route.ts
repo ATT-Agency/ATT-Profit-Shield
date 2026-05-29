@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchFredSeries, yoyDelta, FRED_SERIES, type FredSeriesKey } from "@/lib/fred";
+import { fetchSeriesWithFallback, yoyDelta, FRED_SERIES, type FredSeriesKey } from "@/lib/fred";
 
 export const runtime = "edge";
 export const revalidate = 21600;
@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
     FRED_SERIES.CPI_ALL;
 
   try {
-    const result = await fetchFredSeries(seriesId, { limit });
+    const result = await fetchSeriesWithFallback(seriesId, { limit });
     const delta = yoyDelta(result.observations);
 
     return NextResponse.json({

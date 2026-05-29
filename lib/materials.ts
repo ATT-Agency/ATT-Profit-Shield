@@ -1,5 +1,5 @@
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { fetchFredSeries, yoyDelta } from "@/lib/fred";
+import { fetchSeriesWithFallback, yoyDelta } from "@/lib/fred";
 
 export type TrackingMode = "fred" | "custom";
 
@@ -81,7 +81,7 @@ export async function loadEnrichedMaterials(): Promise<EnrichedMaterial[]> {
   const yoyEntries = await Promise.all(
     fredCodes.map(async (code) => {
       try {
-        const series = await fetchFredSeries(code, { limit: 18 });
+        const series = await fetchSeriesWithFallback(code, { limit: 18 });
         return [code, yoyDelta(series.observations)?.deltaPct ?? null] as const;
       } catch {
         return [code, null] as const;
