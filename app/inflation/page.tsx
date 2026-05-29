@@ -11,7 +11,7 @@ import { InflationMetricsLive } from "@/components/dashboard/inflation-metrics-l
 import { COPY } from "@/lib/copy";
 import { formatPercent } from "@/lib/utils";
 import {
-  fetchFredSeries,
+  fetchSeriesWithFallback,
   yoyDelta,
   FRED_SERIES,
   COMMODITY_CATALOG,
@@ -40,14 +40,16 @@ async function loadMacro(): Promise<{
   cpiDelta: number | null;
   ppiDelta: number | null;
   available: boolean;
+  usingFallback: boolean;
   failureReason: FredFailureReason | null;
 }> {
   try {
     // Fetch 36 months so we can compute 24 months of YoY % change
     const [cpi, ppi] = await Promise.all([
-      fetchFredSeries(FRED_SERIES.CPI_ALL, { limit: 36 }),
-      fetchFredSeries(FRED_SERIES.PPI_ALL, { limit: 36 })
+      fetchSeriesWithFallback(FRED_SERIES.CPI_ALL, { limit: 36 }),
+      fetchSeriesWithFallback(FRED_SERIES.PPI_ALL, { limit: 36 })
     ]);
+    const usingFallback = cpi.source === "bls" || ppi.source === "bls";
 
     // Build month-keyed maps for 12-month lookback
     const cpiByMonth = new Map(cpi.observations.map((o) => [o.date.slice(0, 7), o.value]));
@@ -84,6 +86,7 @@ async function loadMacro(): Promise<{
       cpiDelta: yoyDelta(cpi.observations)?.deltaPct ?? null,
       ppiDelta: yoyDelta(ppi.observations)?.deltaPct ?? null,
       available: true,
+      usingFallback,
       failureReason: null,
     };
   } catch (err) {
@@ -94,6 +97,7 @@ async function loadMacro(): Promise<{
       cpiDelta: null,
       ppiDelta: null,
       available: false,
+      usingFallback: false,
       failureReason: reason,
     };
   }
@@ -101,13 +105,16 @@ async function loadMacro(): Promise<{
 
 async function loadCommodityYoy(): Promise<{
   rows: CommodityYoY[];
+  usingFallback: boolean;
   failureReason: FredFailureReason | null;
 }> {
   let observedFailure: FredFailureReason | null = null;
+  let anyBls = false;
   const rows = await Promise.all(
     COMMODITY_CATALOG.map(async (c) => {
       try {
-        const series = await fetchFredSeries(c.code, { limit: 18 });
+        const series = await fetchSeriesWithFallback(c.code, { limit: 18 });
+        if (series.source === "bls") anyBls = true;
         const delta = yoyDelta(series.observations);
         return { label: c.label, code: c.code, yoyPct: delta?.deltaPct ?? null };
       } catch (err) {
@@ -119,7 +126,7 @@ async function loadCommodityYoy(): Promise<{
     })
   );
   rows.sort((a, b) => (b.yoyPct ?? -Infinity) - (a.yoyPct ?? -Infinity));
-  return { rows, failureReason: observedFailure };
+  return { rows, usingFallback: anyBls, failureReason: observedFailure };
 }
 
 export default async function InflationPage() {
@@ -128,6 +135,7 @@ export default async function InflationPage() {
     loadCommodityYoy(),
   ]);
   const commodities = commodityResult.rows;
+  const usingFallback = macro.usingFallback || commodityResult.usingFallback;
 
   return (
     <div className="space-y-10">
@@ -136,6 +144,18 @@ export default async function InflationPage() {
         headline={COPY.inflation.headline}
         sub={COPY.inflation.sub}
       />
+
+      {usingFallback && (
+        <div className="rounded-2xl border border-amber-700/40 bg-amber-950/30 px-5 py-3 flex items-start gap-3">
+          <span className="text-amber-400 mt-0.5 text-base leading-none">⚠</span>
+          <p className="text-sm text-amber-200/80 leading-relaxed">
+            <span className="font-semibold text-amber-300">Live FRED feed is unavailable.</span>{" "}
+            Charts are currently sourced from the BLS Public Data API — the same underlying data,
+            with a slight publication lag. Numbers will sync back to FRED automatically once the
+            St. Louis Fed service recovers.
+          </p>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         <Card>

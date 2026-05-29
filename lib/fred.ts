@@ -148,6 +148,30 @@ export async function fetchFredSeries(
   throw lastError ?? new FredError("other", "FRED fetch failed for an unknown reason.");
 }
 
+/**
+ * Try FRED first; on upstream outage or timeout fall back to BLS public data.
+ * Returns the same shape as fetchFredSeries plus a `source` field ("fred"|"bls").
+ */
+export async function fetchSeriesWithFallback(
+  seriesId: string,
+  opts: { limit?: number; observationStart?: string } = {}
+): Promise<FredSeriesResponse & { source: "fred" | "bls" }> {
+  try {
+    const result = await fetchFredSeries(seriesId, opts);
+    return { ...result, source: "fred" };
+  } catch (err) {
+    const reason: FredFailureReason =
+      err instanceof FredError ? err.reason : "other";
+    // Only fall back to BLS when FRED itself is at fault, not for bad keys
+    if (reason === "upstream_down" || reason === "timeout" || reason === "other") {
+      const { fetchBlsSeries } = await import("./bls");
+      const bls = await fetchBlsSeries(seriesId, { limit: opts.limit });
+      return bls;
+    }
+    throw err;
+  }
+}
+
 export function yoyDelta(observations: FredObservation[]) {
   const latest = observations.find((o) => o.value !== null);
   if (!latest || latest.value === null) return null;
