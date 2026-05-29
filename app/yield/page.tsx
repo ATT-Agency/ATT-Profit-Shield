@@ -1,7 +1,7 @@
 import { YieldTrackerScreen } from "@/components/screens/yield-tracker";
 
 /**
- * Screen 07 — Usable Yield Tracker
+ * Screen 06 — Usable Yield Tracker
  * Route: /yield
  *
  * No external API keys required — fully client-side computation.

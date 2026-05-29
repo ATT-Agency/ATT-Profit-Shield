@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Screen 07 — Usable Yield Tracker
+ * Screen 06 — Usable Yield Tracker
  *
  * Dense data table for tracking stated vs. actual received quantities.
  * Computes effective unit cost and hidden inflation % per delivery.

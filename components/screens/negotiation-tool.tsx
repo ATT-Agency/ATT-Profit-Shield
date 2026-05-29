@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Screen 06 — Vendor Price Negotiation Tool
+ * Screen 05 — Vendor Price Negotiation Tool
  *
  * Pulls tracked material inputs from Supabase, blends them with live FRED PPI
  * benchmarks, and lets the user enter the actual quoted vendor price increase

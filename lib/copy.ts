@@ -41,20 +41,14 @@ export const COPY = {
     sub: "We layer vendor invoice trend over FRED commodity acceleration to estimate where unit costs land — and the exact price adjustment needed to defend your margin."
   },
 
-  surcharge: {
-    eyebrow: "Screen 05 — Invoice Surcharge",
-    headline: "Pass macro costs through, automatically.",
-    sub: "Connect your billing platform. Map materials to line items. Profit Shield calculates variable surcharges from live FRED PPI data and surfaces them as billable adjustments on your invoices."
-  },
-
   negotiate: {
-    eyebrow: "Screen 06 — Vendor Negotiation",
+    eyebrow: "Screen 05 — Vendor Negotiation",
     headline: "Call out price hikes with data.",
     sub: "Profit Shield scans your tracked vendor inputs, flags increases above FRED PPI benchmarks, shows you the exact math, and drafts a data-backed negotiation email in seconds."
   },
 
   yield: {
-    eyebrow: "Screen 07 — Yield Tracker",
+    eyebrow: "Screen 06 — Yield Tracker",
     headline: "What you ordered vs. what you got.",
     sub: "Enter stated and actual received quantities. Profit Shield calculates your real effective cost per unit and the hidden inflation rate baked into every delivery."
   }

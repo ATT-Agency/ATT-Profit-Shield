@@ -3,7 +3,7 @@ import { loadEnrichedMaterials } from "@/lib/materials";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 /**
- * Screen 06 — Vendor Price Negotiation Tool
+ * Screen 05 — Vendor Price Negotiation Tool
  * Route: /negotiate
  *
  * Server-side data fetched here:
