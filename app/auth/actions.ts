@@ -16,10 +16,10 @@ function readCredentials(formData: FormData): { email: string; password: string 
 }
 
 /**
- * Origin used to build absolute redirect URLs for Supabase email links and
- * OAuth callbacks. Prefers NEXT_PUBLIC_SITE_URL (set per-environment in
- * Cloudflare Pages) and falls back to the inbound request's forwarded host
- * so local dev and preview deploys work without extra config.
+ * Origin used to build absolute redirect URLs for Supabase email links.
+ * Prefers NEXT_PUBLIC_SITE_URL (set per-environment in Cloudflare Pages)
+ * and falls back to the inbound request's forwarded host so local dev and
+ * preview deploys work without extra config.
  */
 function getOrigin(): string {
   const envOrigin = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "");
@@ -55,19 +55,25 @@ export async function signUp(_prev: AuthState, formData: FormData): Promise<Auth
   const emailRedirectTo = `${origin}/auth/callback?next=/`;
 
   if (user?.is_anonymous) {
-    const { error } = await supabase.auth.updateUser(
+    const { data: updated, error } = await supabase.auth.updateUser(
       { email: parsed.email, password: parsed.password },
       { emailRedirectTo }
     );
     if (error) return { error: error.message };
 
-    // When "Confirm email" is enabled, the email change isn't applied until
-    // the user clicks the link. The session keeps working with the existing
-    // anonymous identity until then — their data stays attached.
+    // With "Confirm email" OFF, Supabase flips is_anonymous to false right
+    // away — land the user on the dashboard. With it ON, the session stays
+    // anonymous (their existing materials/expenses keep working) until they
+    // click the link, so we tell them to check their inbox.
+    if (updated.user && updated.user.is_anonymous === false) {
+      revalidatePath("/", "layout");
+      redirect("/");
+    }
+
     revalidatePath("/", "layout");
     return {
       message:
-        "Check your email to confirm your new account. Your tracked data is safe on this device until you do."
+        "Check your email to confirm your new account. Your tracked data stays on this device until you do."
     };
   }
 
@@ -119,8 +125,9 @@ export async function signOut(): Promise<void> {
 
 /**
  * Send a password-reset email. The link Supabase emails lands on
- * /auth/callback with a one-time code, which we exchange and then route
- * the user to /update-password to enter a new password.
+ * /auth/callback with a one-time code (or token_hash, depending on the
+ * project's email template), which we exchange and then route the user
+ * to /update-password to enter a new password.
  */
 export async function resetPassword(_prev: AuthState, formData: FormData): Promise<AuthState> {
   const email = String(formData.get("email") ?? "").trim();
@@ -139,9 +146,9 @@ export async function resetPassword(_prev: AuthState, formData: FormData): Promi
 }
 
 /**
- * Finalize a password reset. The /auth/callback route exchanges the code
- * from the recovery link into a session before the user reaches this
- * action, so updateUser runs against an authenticated session.
+ * Finalize a password reset. /auth/callback exchanges the code from the
+ * recovery link into a session before the user reaches this action, so
+ * updateUser runs against an authenticated, non-anonymous session.
  */
 export async function updatePassword(
   _prev: AuthState,
@@ -149,9 +156,9 @@ export async function updatePassword(
 ): Promise<AuthState> {
   const password = String(formData.get("password") ?? "");
   const confirm = String(formData.get("confirm") ?? "");
-  if (!password) return { error: "Password is required." };
+  if (!password || !confirm) return { error: "Please fill in both fields." };
   if (password.length < 6) return { error: "Password must be at least 6 characters." };
-  if (confirm && confirm !== password) return { error: "Passwords don't match." };
+  if (password !== confirm) return { error: "Passwords don't match." };
 
   const supabase = createSupabaseServerClient();
   const {
@@ -168,34 +175,4 @@ export async function updatePassword(
 
   revalidatePath("/", "layout");
   redirect("/");
-}
-
-/**
- * Hand off to a third-party identity provider. Supabase generates a PKCE
- * verifier (stored as a cookie via our server-client adapter) and returns
- * an authorize URL; we redirect the browser to it. Upon return, the
- * provider lands the user back on /auth/callback?code=... which exchanges
- * the code for a session.
- */
-async function signInWithOAuth(provider: "google" | "azure"): Promise<never> {
-  const supabase = createSupabaseServerClient();
-  const origin = getOrigin();
-  const { data, error } = await supabase.auth.signInWithOAuth({
-    provider,
-    options: { redirectTo: `${origin}/auth/callback?next=/` }
-  });
-  if (error || !data?.url) {
-    redirect(
-      `/login?error=${encodeURIComponent(error?.message ?? "OAuth sign-in failed.")}`
-    );
-  }
-  redirect(data.url);
-}
-
-export async function signInWithGoogle(): Promise<void> {
-  await signInWithOAuth("google");
-}
-
-export async function signInWithMicrosoft(): Promise<void> {
-  await signInWithOAuth("azure");
 }
