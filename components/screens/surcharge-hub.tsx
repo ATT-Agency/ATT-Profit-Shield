@@ -22,7 +22,7 @@
  *   FRED_API_KEY                 — drives the surcharge amount via PPI YoY
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   CheckCircle2,
   Circle,
@@ -90,6 +90,8 @@ export interface InitialMaterial {
 
 interface MaterialLineItem {
   id: string;
+  /** public.surcharge_mappings.id — null until the row has been persisted. */
+  mappingId: string | null;
   materialName: string;
   fredCode: string;
   fredLabel: string;
@@ -101,6 +103,22 @@ interface MaterialLineItem {
   billingLabel: string;
   mappedPlatform: PlatformId | null;
 }
+
+/** Mirrors the public.surcharge_mappings row shape returned by GET /api/surcharge/mappings. */
+type SavedSurchargeMapping = {
+  id: string;
+  material_id: string | null;
+  material_name: string;
+  fred_code: string | null;
+  fred_label: string | null;
+  billing_label: string;
+  surcharge_enabled: boolean;
+  mapped_platform: "stripe" | "square" | "quickbooks" | null;
+  last_fred_pct: number | null;
+  last_synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
 
 interface PushResult {
   platform: PlatformId;
@@ -431,29 +449,48 @@ function PushPanel({
     stripe: false,
     square: false,
   });
+  // Free-text search per platform, fed straight into the `?query=` parameter
+  // on /api/{platform}/customers. Empty string falls back to the default
+  // 25-most-recent list; any non-empty query routes through Stripe's
+  // customers.search and Square's /customers/search endpoints.
+  const [searchQuery, setSearchQuery] = useState<Record<PlatformId, string>>({
+    stripe: "",
+    square: "",
+  });
 
-  const loadCustomers = useCallback(async (platform: PlatformId) => {
-    setLoadingCustomers((p) => ({ ...p, [platform]: true }));
-    try {
-      const res = await fetch(`/api/${platform}/customers`);
-      const data = await res.json();
-      setCustomers((p) => ({ ...p, [platform]: data.customers ?? [] }));
-    } catch {
-      setCustomers((p) => ({ ...p, [platform]: [] }));
-    } finally {
-      setLoadingCustomers((p) => ({ ...p, [platform]: false }));
-    }
-  }, []);
-
-  // Auto-fetch customers when a platform flips to connected.
-  useEffect(() => {
-    (["stripe", "square"] as PlatformId[]).forEach((p) => {
-      if (connections[p].status === "connected" && customers[p].length === 0 && !loadingCustomers[p]) {
-        loadCustomers(p);
+  const loadCustomers = useCallback(
+    async (platform: PlatformId, query: string = "") => {
+      setLoadingCustomers((p) => ({ ...p, [platform]: true }));
+      try {
+        const url = query
+          ? `/api/${platform}/customers?query=${encodeURIComponent(query)}`
+          : `/api/${platform}/customers`;
+        const res = await fetch(url);
+        const data = await res.json();
+        setCustomers((p) => ({ ...p, [platform]: data.customers ?? [] }));
+      } catch {
+        setCustomers((p) => ({ ...p, [platform]: [] }));
+      } finally {
+        setLoadingCustomers((p) => ({ ...p, [platform]: false }));
       }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connections.stripe.status, connections.square.status]);
+    },
+    []
+  );
+
+  // Debounced fetch: re-runs whenever the platform connects OR the search
+  // query changes. 300ms quiet period absorbs typing bursts without firing
+  // a network request on every keystroke.
+  useEffect(() => {
+    if (connections.stripe.status !== "connected") return;
+    const t = setTimeout(() => loadCustomers("stripe", searchQuery.stripe), 300);
+    return () => clearTimeout(t);
+  }, [connections.stripe.status, searchQuery.stripe, loadCustomers]);
+
+  useEffect(() => {
+    if (connections.square.status !== "connected") return;
+    const t = setTimeout(() => loadCustomers("square", searchQuery.square), 300);
+    return () => clearTimeout(t);
+  }, [connections.square.status, searchQuery.square, loadCustomers]);
 
   async function pushToPlatform(platform: PlatformId) {
     const enabled = items.filter(
@@ -571,7 +608,7 @@ function PushPanel({
                   <p className="font-medium text-cream text-sm">{intg.label}</p>
                 </div>
                 <button
-                  onClick={() => loadCustomers(platform)}
+                  onClick={() => loadCustomers(platform, searchQuery[platform])}
                   className="text-[10px] text-cream-mute hover:text-cream flex items-center gap-1"
                   disabled={loadingCustomers[platform]}
                 >
@@ -585,6 +622,22 @@ function PushPanel({
               </div>
 
               <label className="text-[10px] uppercase tracking-[0.18em] text-cream-mute">
+                Search
+              </label>
+              <input
+                type="search"
+                value={searchQuery[platform]}
+                onChange={(e) =>
+                  setSearchQuery((p) => ({
+                    ...p,
+                    [platform]: e.currentTarget.value,
+                  }))
+                }
+                placeholder="Name or email…"
+                className="mt-1 w-full rounded-xl border border-cocoa-700 bg-cocoa-900 px-3 py-2 text-xs text-cream placeholder:text-cream-mute focus:outline-none focus:ring-1 focus:ring-vibrant"
+              />
+
+              <label className="mt-3 block text-[10px] uppercase tracking-[0.18em] text-cream-mute">
                 Customer
               </label>
               <select
@@ -603,7 +656,9 @@ function PushPanel({
               </select>
               {opts.length === 0 && !loadingCustomers[platform] ? (
                 <p className="text-[10px] text-cream-mute mt-1">
-                  No customers found. Create one in your {intg.label} dashboard first.
+                  {searchQuery[platform]
+                    ? `No matches for "${searchQuery[platform]}". Try a shorter fragment.`
+                    : `No customers found. Create one in your ${intg.label} dashboard first.`}
                 </p>
               ) : null}
 
@@ -805,6 +860,28 @@ export function SurchargeHubScreen({
   const [pushResults, setPushResults] = useState<PushResult[]>([]);
   const [fredRefreshing, setFredRefreshing] = useState(false);
 
+  // Synchronous mirror of `items` so handlers fired in quick succession
+  // (rapid clicks, paste-typed labels) read the latest pre-render state
+  // without waiting for React's commit phase.
+  const itemsRef = useRef<MaterialLineItem[]>([]);
+  // Per-material POST chain — guarantees the first INSERT lands (and we
+  // capture its returned mappingId) before any subsequent UPDATE fires,
+  // even if the user rapid-fires toggle/label/platform edits.
+  const savePromisesRef = useRef<Map<string, Promise<void>>>(new Map());
+  // Per-material mapping id ref, refreshed synchronously when the first
+  // INSERT returns. React state is the source of truth for rendering;
+  // this ref is the source of truth for the next outbound POST.
+  const mappingIdsRef = useRef<Map<string, string>>(new Map());
+  // Per-material debounce timers for billing-label keystrokes.
+  const labelDebounceRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map()
+  );
+  // Keep itemsRef synced with React state for paths that mutate items
+  // through the prev-callback form (e.g. fetchFredData, handleDisconnect).
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
   async function fetchFredData() {
     const codes = Array.from(
       new Set(items.map((i) => i.fredCode).filter(Boolean))
@@ -834,22 +911,66 @@ export function SurchargeHubScreen({
     setFredRefreshing(false);
   }
 
-  // Hydrate items from server-supplied live materials.
+  // Hydrate items: pull existing surcharge_mappings from Supabase and overlay
+  // their saved billing_label / surcharge_enabled / mapped_platform onto the
+  // server-supplied materials. Each material is also seeded with its mappingId
+  // (null when no row has been persisted yet).
   useEffect(() => {
-    const rows: MaterialLineItem[] = initialMaterials.map((m) => ({
-      id: m.id,
-      materialName: m.materialName,
-      fredCode: m.fredCode,
-      fredLabel: m.fredLabel,
-      driftPct: m.driftPct,
-      baselineCost: m.baselineCost,
-      quantity: m.quantity,
-      unit: m.unit,
-      surchargeEnabled: m.driftPct > 0,
-      billingLabel: `Material Surcharge — ${m.materialName} (FRED PPI ${formatPercent(m.driftPct)})`,
-      mappedPlatform: null,
-    }));
-    setItems(rows);
+    let cancelled = false;
+    void (async () => {
+      let saved: SavedSurchargeMapping[] = [];
+      try {
+        const res = await fetch("/api/surcharge/mappings");
+        if (res.ok) {
+          const data = (await res.json()) as {
+            mappings?: SavedSurchargeMapping[];
+          };
+          saved = data.mappings ?? [];
+        }
+      } catch {
+        // RLS denial or network error leaves `saved` empty — fall through to defaults.
+      }
+      if (cancelled) return;
+
+      const byMaterial = new Map<string, SavedSurchargeMapping>();
+      const idLookup = new Map<string, string>();
+      for (const m of saved) {
+        if (m.material_id) {
+          byMaterial.set(m.material_id, m);
+          idLookup.set(m.material_id, m.id);
+        }
+      }
+      mappingIdsRef.current = idLookup;
+
+      const rows: MaterialLineItem[] = initialMaterials.map((m) => {
+        const s = byMaterial.get(m.id);
+        const mappedPlatform: PlatformId | null =
+          s?.mapped_platform === "stripe" || s?.mapped_platform === "square"
+            ? s.mapped_platform
+            : null;
+        return {
+          id: m.id,
+          mappingId: s?.id ?? null,
+          materialName: m.materialName,
+          fredCode: m.fredCode,
+          fredLabel: m.fredLabel,
+          driftPct: m.driftPct,
+          baselineCost: m.baselineCost,
+          quantity: m.quantity,
+          unit: m.unit,
+          surchargeEnabled: s?.surcharge_enabled ?? m.driftPct > 0,
+          billingLabel:
+            s?.billing_label ??
+            `Material Surcharge — ${m.materialName} (FRED PPI ${formatPercent(m.driftPct)})`,
+          mappedPlatform,
+        };
+      });
+      itemsRef.current = rows;
+      setItems(rows);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [initialMaterials]);
 
   // Restore non-secret connection metadata across reloads. We don't persist
@@ -958,22 +1079,110 @@ export function SurchargeHubScreen({
     }));
   }
 
+  // POST the current snapshot of a material line item to
+  // /api/surcharge/mappings. Saves are serialized per material so a fast
+  // toggle-then-edit chain can't race two INSERTs and produce duplicates —
+  // the first POST's returned id is cached in mappingIdsRef so the second
+  // call sees an UPDATE.
+  async function persistMapping(snapshot: MaterialLineItem) {
+    const materialId = snapshot.id;
+    const prev = savePromisesRef.current.get(materialId) ?? Promise.resolve();
+    const next = prev.then(async () => {
+      const existingId =
+        mappingIdsRef.current.get(materialId) ?? snapshot.mappingId ?? null;
+      try {
+        const res = await fetch("/api/surcharge/mappings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: existingId ?? undefined,
+            material_id: snapshot.id,
+            material_name: snapshot.materialName,
+            fred_code: snapshot.fredCode || null,
+            fred_label: snapshot.fredLabel || null,
+            billing_label: snapshot.billingLabel,
+            surcharge_enabled: snapshot.surchargeEnabled,
+            mapped_platform: snapshot.mappedPlatform,
+            last_fred_pct: snapshot.driftPct,
+          }),
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as { mapping?: { id?: string } };
+        const newId = data.mapping?.id;
+        if (newId && !existingId) {
+          mappingIdsRef.current.set(materialId, newId);
+          setItems((curr) =>
+            curr.map((i) =>
+              i.id === materialId ? { ...i, mappingId: newId } : i
+            )
+          );
+        }
+      } catch {
+        // Silent: a failed POST leaves the optimistic UI intact; the next
+        // edit will retry the persist.
+      }
+    });
+    savePromisesRef.current.set(materialId, next);
+  }
+
   function toggleSurcharge(id: string) {
-    setItems((prev) =>
-      prev.map((i) => (i.id === id ? { ...i, surchargeEnabled: !i.surchargeEnabled } : i))
-    );
+    const idx = itemsRef.current.findIndex((i) => i.id === id);
+    if (idx === -1) return;
+    const updated: MaterialLineItem = {
+      ...itemsRef.current[idx],
+      surchargeEnabled: !itemsRef.current[idx].surchargeEnabled,
+    };
+    const next = [
+      ...itemsRef.current.slice(0, idx),
+      updated,
+      ...itemsRef.current.slice(idx + 1),
+    ];
+    itemsRef.current = next;
+    setItems(next);
+    void persistMapping(updated);
   }
 
   function updateLabel(id: string, label: string) {
-    setItems((prev) =>
-      prev.map((i) => (i.id === id ? { ...i, billingLabel: label } : i))
+    const idx = itemsRef.current.findIndex((i) => i.id === id);
+    if (idx === -1) return;
+    const updated: MaterialLineItem = {
+      ...itemsRef.current[idx],
+      billingLabel: label,
+    };
+    const next = [
+      ...itemsRef.current.slice(0, idx),
+      updated,
+      ...itemsRef.current.slice(idx + 1),
+    ];
+    itemsRef.current = next;
+    setItems(next);
+    // Debounce keystrokes: 500ms after the last edit, persist.
+    const existing = labelDebounceRef.current.get(id);
+    if (existing) clearTimeout(existing);
+    labelDebounceRef.current.set(
+      id,
+      setTimeout(() => {
+        labelDebounceRef.current.delete(id);
+        void persistMapping(updated);
+      }, 500)
     );
   }
 
   function updatePlatform(id: string, platform: PlatformId | null) {
-    setItems((prev) =>
-      prev.map((i) => (i.id === id ? { ...i, mappedPlatform: platform } : i))
-    );
+    const idx = itemsRef.current.findIndex((i) => i.id === id);
+    if (idx === -1) return;
+    const updated: MaterialLineItem = {
+      ...itemsRef.current[idx],
+      mappedPlatform: platform,
+    };
+    const next = [
+      ...itemsRef.current.slice(0, idx),
+      updated,
+      ...itemsRef.current.slice(idx + 1),
+    ];
+    itemsRef.current = next;
+    setItems(next);
+    void persistMapping(updated);
   }
 
   function recordPushResult(r: PushResult) {

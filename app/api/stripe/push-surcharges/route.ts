@@ -97,25 +97,32 @@ export async function POST(req: Request) {
       stripeUserId: connection.stripeUserId ?? undefined,
     });
 
-    const createdItems = [];
-    for (const item of body.items) {
-      if (!Number.isFinite(item.amountCents) || item.amountCents <= 0) continue;
-      const created = await stripe.invoiceItems.create({
-        customer: body.customerId,
-        amount: Math.round(item.amountCents),
-        currency: item.currency ?? "usd",
-        description: item.description,
-        metadata: {
-          source: "att-profit-shield",
-          ...(item.metadata ?? {}),
-        },
-      });
-      createdItems.push({
-        id: created.id,
-        amount: created.amount,
-        description: created.description,
-      });
-    }
+    // Filter invalid amounts up-front so we don't waste round-trips on rows
+    // the Hub already discarded — then fire all surviving creates in parallel.
+    // Promise.all preserves fail-fast semantics: if any one rejects, the
+    // outer try/catch surfaces the error just like the previous serial loop.
+    const validItems = body.items.filter(
+      (item) => Number.isFinite(item.amountCents) && item.amountCents > 0
+    );
+    const created = await Promise.all(
+      validItems.map((item) =>
+        stripe.invoiceItems.create({
+          customer: body.customerId,
+          amount: Math.round(item.amountCents),
+          currency: item.currency ?? "usd",
+          description: item.description,
+          metadata: {
+            source: "att-profit-shield",
+            ...(item.metadata ?? {}),
+          },
+        })
+      )
+    );
+    const createdItems = created.map((c) => ({
+      id: c.id,
+      amount: c.amount,
+      description: c.description,
+    }));
 
     let invoice: { id: string; hostedUrl: string | null; status: string | null } | null = null;
     if (body.createInvoice !== false) {
