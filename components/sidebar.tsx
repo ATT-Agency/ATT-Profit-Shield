@@ -1,22 +1,18 @@
-"use client";
-
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { Activity, Boxes, LineChart, ShieldCheck, Wallet, MessageSquare, Scale } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { LogOut, Sparkles, ShieldCheck } from "lucide-react";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { signOut } from "@/app/auth/actions";
+import { Button } from "@/components/ui/button";
 import { COPY } from "@/lib/copy";
+import { SidebarNav } from "@/components/sidebar-nav";
 
-const links = [
-  { href: "/", label: COPY.nav.leaks, icon: Wallet, code: "01" },
-  { href: "/materials", label: COPY.nav.materials, icon: Boxes, code: "02" },
-  { href: "/inflation", label: COPY.nav.inflation, icon: Activity, code: "03" },
-  { href: "/forecast", label: COPY.nav.forecast, icon: LineChart, code: "04" },
-  { href: "/negotiate", label: "Vendor Negotiation", icon: MessageSquare, code: "05" },
-  { href: "/yield", label: "Yield Tracker", icon: Scale, code: "06" }
-];
+export async function Sidebar() {
+  const supabase = createSupabaseServerClient();
+  const {
+    data: { user }
+  } = await supabase.auth.getUser();
 
-export function Sidebar() {
-  const pathname = usePathname();
+  const isPermanent = Boolean(user && !user.is_anonymous && user.email);
 
   return (
     <aside className="sticky top-0 h-screen w-[280px] shrink-0 border-r border-cocoa-700 bg-cocoa-950/80 backdrop-blur-xl hidden lg:flex flex-col">
@@ -34,48 +30,53 @@ export function Sidebar() {
 
       <div className="hairline-divider mx-7" />
 
-      <nav className="px-4 py-6 flex-1 space-y-1">
-        {links.map((l) => {
-          const active = l.href === "/" ? pathname === "/" : pathname.startsWith(l.href);
-          const Icon = l.icon;
-          return (
-            <Link
-              key={l.href}
-              href={l.href}
-              className={cn(
-                "group flex items-center gap-3 rounded-2xl px-3 py-3 text-sm transition-colors",
-                active
-                  ? "bg-cocoa-800 text-cream"
-                  : "text-cream-dim hover:text-cream hover:bg-cocoa-900"
-              )}
-            >
-              <span
-                className={cn(
-                  "size-9 rounded-xl flex items-center justify-center border border-cocoa-700",
-                  active ? "bg-vibrant text-cocoa-950 border-vibrant" : "bg-cocoa-900 text-cream-mute"
-                )}
-              >
-                <Icon className="size-4" />
-              </span>
-              <span className="flex-1">
-                <span className="block text-[10px] uppercase tracking-[0.22em] text-cream-mute">
-                  Screen {l.code}
-                </span>
-                <span className="block font-medium">{l.label}</span>
-              </span>
-            </Link>
-          );
-        })}
-      </nav>
+      <SidebarNav />
 
       <div className="m-4 rounded-2xl border border-cocoa-700 bg-cocoa-900 p-4">
-        <p className="text-[11px] uppercase tracking-[0.2em] text-cream-mute">Live signals</p>
-        <p className="font-display text-xl mt-1 leading-tight">
-          FRED + Teller
-        </p>
-        <p className="text-xs text-cream-mute mt-1">
-          Macro and bank data feed every screen.
-        </p>
+        {isPermanent ? (
+          <form action={signOut} className="space-y-3">
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.2em] text-cream-mute">
+                Signed in
+              </p>
+              <p
+                className="font-medium text-sm mt-1 truncate"
+                title={user?.email ?? undefined}
+              >
+                {user?.email}
+              </p>
+            </div>
+            <Button
+              type="submit"
+              variant="outline"
+              size="sm"
+              className="w-full"
+            >
+              <LogOut className="size-4" />
+              Sign out
+            </Button>
+          </form>
+        ) : (
+          <div className="space-y-3">
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.2em] text-cream-mute">
+                Guest session
+              </p>
+              <p className="font-display text-lg mt-1 leading-tight">
+                Save your progress
+              </p>
+              <p className="text-xs text-cream-mute mt-1">
+                Lock in your materials and forecasts before you clear this browser.
+              </p>
+            </div>
+            <Link href="/login" className="block">
+              <Button type="button" variant="primary" size="sm" className="w-full">
+                <Sparkles className="size-4" />
+                Sign up
+              </Button>
+            </Link>
+          </div>
+        )}
       </div>
     </aside>
   );
