@@ -4,8 +4,15 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseServiceClient } from "@/lib/supabase/service";
 
 export type AuthState = { error?: string; message?: string } | undefined;
+
+type ResendSendResponse = {
+  id?: string;
+  message?: string;
+  name?: string;
+};
 
 function readCredentials(formData: FormData): { email: string; password: string } | string {
   const email = String(formData.get("email") ?? "").trim();
@@ -162,22 +169,93 @@ export async function signOut(): Promise<void> {
 }
 
 /**
- * Send a password-reset email. The link Supabase emails lands on
- * /auth/callback with a one-time code (or token_hash, depending on the
- * project's email template), which we exchange and then route the user
- * to /update-password to enter a new password.
+ * Send a password-reset email. We keep Supabase Auth as the token issuer,
+ * but deliver the generated recovery link through Resend instead of
+ * Supabase SMTP so email delivery is owned by the app runtime.
  */
 export async function resetPassword(_prev: AuthState, formData: FormData): Promise<AuthState> {
   const email = String(formData.get("email") ?? "").trim();
   if (!email) return { error: "Email is required." };
 
   const origin = getOrigin();
+  const resendApiKey = process.env.RESEND_API_KEY;
+  if (!resendApiKey) {
+    console.error("[auth] RESEND_API_KEY is missing.");
+    return { error: "Password reset email is not configured. Please try again later." };
+  }
 
-  const supabase = createSupabaseServerClient();
-  const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${origin}/auth/callback?next=/update-password`
-  });
-  if (error) return { error: error.message };
+  let resetLink: string;
+  try {
+    const supabaseAdmin = createSupabaseServiceClient();
+    const { data, error } = await supabaseAdmin.auth.admin.generateLink({
+      type: "recovery",
+      email
+    });
+
+    if (error) {
+      console.error("[auth] failed to generate recovery link:", error.message);
+      return { error: "Unable to create a reset link for that email." };
+    }
+
+    const tokenHash = data.properties?.hashed_token;
+    if (!tokenHash) {
+      console.error("[auth] recovery link response did not include a hashed token.");
+      return { error: "Unable to create a reset link for that email." };
+    }
+
+    resetLink = `${origin}/auth/callback?token_hash=${tokenHash}&type=recovery&next=/update-password`;
+  } catch (error) {
+    console.error("[auth] failed to initialize password reset:", error);
+    return { error: "Unable to create a reset link for that email." };
+  }
+
+  const emailHtml = `
+      <div style="font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;line-height:1.5;color:#15100d">
+        <h1 style="font-size:20px;margin:0 0 12px">Reset your password</h1>
+        <p style="margin:0 0 16px">Use this secure link to choose a new ATT Profit Shield password. The link can only be used once.</p>
+        <p style="margin:0 0 20px">
+          <a href="${resetLink}" style="display:inline-block;background:#15100d;color:#fff;text-decoration:none;padding:12px 18px;border-radius:8px;font-weight:700">
+            Reset password
+          </a>
+        </p>
+        <p style="margin:0;color:#6b625a;font-size:13px">If you did not request this, you can ignore this email.</p>
+      </div>
+    `;
+
+  let resendPayload: ResendSendResponse | null = null;
+  let resendResponse: Response;
+  try {
+    resendResponse = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${resendApiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        from: process.env.RESEND_FROM_EMAIL ?? "ATT Profit Shield <onboarding@resend.dev>",
+        to: email,
+        subject: "Reset your ATT Profit Shield password",
+        html: emailHtml,
+        text: `Reset your ATT Profit Shield password: ${resetLink}`
+      })
+    });
+  } catch (error) {
+    console.error("[auth] failed to reach Resend:", error);
+    return { error: "We couldn't send the reset email. Please try again." };
+  }
+
+  try {
+    resendPayload = (await resendResponse.json()) as ResendSendResponse;
+  } catch {
+    resendPayload = null;
+  }
+
+  if (!resendResponse.ok) {
+    console.error("[auth] failed to send password reset email:", resendPayload);
+    return { error: "We couldn't send the reset email. Please try again." };
+  }
+
+  console.log("[auth] sent password reset email via Resend:", resendPayload?.id);
 
   return {
     message: "If an account exists for that email, a reset link is on its way."

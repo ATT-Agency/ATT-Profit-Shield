@@ -25,70 +25,21 @@ function safeNextPath(raw: string | null): string {
   return raw && raw.startsWith("/") && !raw.startsWith("//") ? raw : "/";
 }
 
-/**
- * Hash-fragment fallback for Supabase's implicit-flow recovery emails.
- * Those land here as `/auth/callback#access_token=...&type=recovery` and
- * the browser never forwards the fragment to the server, so this route
- * handler sees an empty query string. A 3xx redirect would *also* strip
- * the fragment, permanently losing the recovery token.
- *
- * Instead we return a tiny inline HTML shim whose script reads
- * `window.location.hash` and `location.replace()`s the browser — fragment
- * intact — to the destination page (`/update-password` for recovery,
- * `/` otherwise). The destination's Supabase browser client then picks
- * up the fragment, stores the session in cookies, and fires
- * PASSWORD_RECOVERY via onAuthStateChange. See
- * components/auth/anonymous-auth-provider.tsx for that side.
- */
-function hashFragmentFallback(): NextResponse {
-  const body = `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="robots" content="noindex" />
-  <title>Finishing sign-in&hellip;</title>
-</head>
-<body style="margin:0;font-family:system-ui,sans-serif;background:#15100D;color:#F5EFE6;padding:24px">
-  <p>Finishing sign-in&hellip;</p>
-  <script>
-    (function () {
-      var hash = window.location.hash || "";
-      var params = new URLSearchParams(hash.replace(/^#/, ""));
-      var errorCode = params.get("error") || params.get("error_code");
-      if (errorCode) {
-        var description = params.get("error_description") || errorCode;
-        window.location.replace("/login?error=" + encodeURIComponent(description));
-        return;
-      }
-      var type = params.get("type");
-      var dest = type === "recovery" ? "/update-password" : "/";
-      // Preserve the fragment so the destination page's Supabase browser
-      // client can detectSessionInUrl and finalize the session.
-      window.location.replace(dest + hash);
-    })();
-  </script>
-  <noscript>JavaScript is required to finish signing in. Please enable it and try again.</noscript>
-</body>
-</html>`;
-  return new NextResponse(body, {
-    status: 200,
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": "no-store"
-    }
-  });
+function loginErrorRedirect(origin: string, message: string): NextResponse {
+  return NextResponse.redirect(
+    `${origin}/login?mode=signin&error=${encodeURIComponent(message)}`
+  );
 }
 
 /**
  * Callback for every Supabase auth flow that hands the browser back a
  * one-time token: email verification, password recovery, magic links.
  *
- * Three URL shapes are possible depending on the project's email templates:
+ * Two URL shapes are possible depending on the project's email templates:
  *   - PKCE:                 /auth/callback?code=...&next=/...
  *   - OTP (token_hash):     /auth/callback?token_hash=...&type=...&next=/...
- *   - Implicit (hash frag): /auth/callback#access_token=...&type=recovery
  *
- * We handle all three. `next` is restricted to in-app paths to prevent
+ * We handle both. `next` is restricted to in-app paths to prevent
  * open redirects.
  */
 export async function GET(request: NextRequest) {
@@ -102,9 +53,7 @@ export async function GET(request: NextRequest) {
     const supabase = createSupabaseServerClient();
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (error) {
-      return NextResponse.redirect(
-        `${origin}/login?error=${encodeURIComponent(error.message)}`
-      );
+      return loginErrorRedirect(origin, error.message);
     }
     return NextResponse.redirect(`${origin}${next}`);
   }
@@ -116,9 +65,7 @@ export async function GET(request: NextRequest) {
       type: rawType as EmailOtpType
     });
     if (error) {
-      return NextResponse.redirect(
-        `${origin}/login?error=${encodeURIComponent(error.message)}`
-      );
+      return loginErrorRedirect(origin, error.message);
     }
     // For recovery, force /update-password regardless of ?next= so the
     // new session is consumed by the password form instead of silently
@@ -127,9 +74,5 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(`${origin}${dest}`);
   }
 
-  // Neither query param is present — the token is almost certainly in
-  // the URL fragment (Supabase's implicit-flow recovery emails). Hand
-  // control to the browser instead of redirecting, otherwise the
-  // fragment is permanently lost.
-  return hashFragmentFallback();
+  return loginErrorRedirect(origin, "This sign-in link is invalid or has expired.");
 }
