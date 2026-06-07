@@ -32,7 +32,7 @@ export async function Sidebar() {
 
   return (
     <aside className="sticky top-0 h-screen w-[280px] shrink-0 border-r border-cocoa-700 bg-cocoa-950/80 backdrop-blur-xl hidden lg:flex flex-col">
-      <div className="px-7 pt-8 pb-6">
+      <div className="px-7 pt-8 pb-6 shrink-0">
         <Link href="/" className="flex items-center gap-3 group">
           <div className="size-10 rounded-2xl bg-vibrant flex items-center justify-center text-cocoa-950 shadow-glow">
             <ShieldCheck className="size-5" />
@@ -44,11 +44,32 @@ export async function Sidebar() {
         </Link>
       </div>
 
-      <div className="hairline-divider mx-7" />
+      <div className="hairline-divider mx-7 shrink-0" />
 
-      <SidebarNav />
+      {/*
+        Scrollable middle band. `min-h-0` is required so this flex child
+        can shrink below its content's intrinsic height on short
+        viewports — without it, `overflow-y-auto` never engages and the
+        auth card below gets pushed off-screen. Scrollbar is themed via
+        webkit arbitrary variants + Firefox's scrollbar-color so the
+        chrome matches the cocoa palette instead of the OS default.
+      */}
+      <div
+        className="
+          flex-1 min-h-0 overflow-y-auto
+          [scrollbar-width:thin]
+          [scrollbar-color:#2F211A_transparent]
+          [&::-webkit-scrollbar]:w-1.5
+          [&::-webkit-scrollbar-track]:bg-transparent
+          [&::-webkit-scrollbar-thumb]:rounded-full
+          [&::-webkit-scrollbar-thumb]:bg-cocoa-700
+          [&::-webkit-scrollbar-thumb]:hover:bg-cocoa-600
+        "
+      >
+        <SidebarNav />
+      </div>
 
-      <div className="m-4 rounded-2xl border border-cocoa-700 bg-cocoa-900 p-4">
+      <div className="m-4 shrink-0 rounded-2xl border border-cocoa-700 bg-cocoa-900 p-4">
         {permanent ? (
           <form action={signOut} className="space-y-3">
             <div>
