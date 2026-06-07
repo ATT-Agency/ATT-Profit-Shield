@@ -46,7 +46,7 @@ import { formatCurrency, formatPercent, cn } from "@/lib/utils";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-interface YieldEntry {
+export interface YieldEntry {
   id?: string;
   material: string;
   unit: string;
@@ -733,10 +733,21 @@ function EditCell({
 
 // ── Main Screen ────────────────────────────────────────────────────────────────
 
-export function YieldTrackerScreen() {
+interface YieldTrackerScreenProps {
+  /**
+   * Pre-fetched on the server in app/yield/page.tsx. When omitted, the
+   * screen falls back to a client-side /api/yield fetch on mount (kept
+   * so the component can still be used standalone in a Storybook-style
+   * context). When provided, hydration is the source of truth and the
+   * client never races the SSR'd auth state.
+   */
+  initialEntries?: YieldEntry[];
+}
+
+export function YieldTrackerScreen({ initialEntries }: YieldTrackerScreenProps = {}) {
   const { toasts, toast } = useToast();
-  const [entries, setEntries] = useState<YieldEntry[]>([]);
-  const [loaded, setLoaded] = useState(false);
+  const [entries, setEntries] = useState<YieldEntry[]>(initialEntries ?? []);
+  const [loaded, setLoaded] = useState(initialEntries !== undefined);
 
   // Sorting
   const [sortKey, setSortKey] = useState<SortKey>("invoice_date");
@@ -748,8 +759,9 @@ export function YieldTrackerScreen() {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
 
-  // Load from Supabase on mount
+  // Fall back to client-side load only when the page didn't pre-fetch.
   useEffect(() => {
+    if (initialEntries !== undefined) return;
     fetch("/api/yield")
       .then((r) => r.json())
       .then((data: { entries?: YieldEntry[] }) => {
@@ -761,7 +773,7 @@ export function YieldTrackerScreen() {
         toast("error", "Failed to load yield data");
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [initialEntries]);
 
   async function handleAdd(entry: YieldEntry) {
     const optimistic = { ...entry, _saving: true };
